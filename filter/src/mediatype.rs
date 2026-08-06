@@ -112,7 +112,7 @@ pub fn make_output_type(fmt: &FormatInfo, fourcc: u32) -> AM_MEDIA_TYPE {
     } else {
         fourcc
     };
-    let mut vih = VIDEOINFOHEADER {
+    let vih = VIDEOINFOHEADER {
         rcSource: if cfg.out_rcsource_zero {
             windows::Win32::Foundation::RECT { left: 0, top: 0, right: 0, bottom: 0 }
         } else {

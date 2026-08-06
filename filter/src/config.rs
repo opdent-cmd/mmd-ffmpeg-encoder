@@ -12,6 +12,8 @@ pub struct Config {
     pub preset: String,
     pub crf: i32,
     pub bitrate: i32,
+    // crf = quality-first, vbr = dynamic bitrate, cbr = constant bitrate.
+    pub rate_mode: String,
     pub extra: String,
     // Output media-type tuning (mainly for AVI Mux compatibility).
     pub out_lsample: i32,
@@ -93,6 +95,7 @@ pub fn load() -> Config {
         preset: "veryfast".to_string(),
         crf: 18,
         bitrate: 0,
+        rate_mode: "crf".to_string(),
         extra: String::new(),
         out_lsample: 0,
         out_cbextra: 0,
@@ -144,6 +147,7 @@ pub fn load() -> Config {
             "video" if key == "preset" => cfg.preset = value,
             "video" if key == "crf" => cfg.crf = value.parse().unwrap_or(18),
             "video" if key == "bitrate" => cfg.bitrate = value.parse().unwrap_or(0),
+            "video" if key == "rate_mode" => cfg.rate_mode = value,
             "video" if key == "extra" => cfg.extra = value,
             "video" if key == "out_lsample" => cfg.out_lsample = value.parse().unwrap_or(0),
             "video" if key == "out_cbextra" => cfg.out_cbextra = value.parse().unwrap_or(0),
@@ -167,6 +171,15 @@ pub fn load() -> Config {
             }
             _ => {}
         }
+    }
+    // Backwards compatibility: an old ini with bitrate set but no rate_mode
+    // was a variable (average) bitrate configuration.
+    if cfg.rate_mode.is_empty() {
+        cfg.rate_mode = if cfg.bitrate > 0 {
+            "vbr".to_string()
+        } else {
+            "crf".to_string()
+        };
     }
     cfg
 }

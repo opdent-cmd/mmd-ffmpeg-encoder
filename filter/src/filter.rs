@@ -51,7 +51,7 @@ impl Drop for Filter {
 
 impl windows::Win32::System::Com::IPersist_Impl for Filter_Impl {
     fn GetClassID(&self) -> Result<GUID> {
-        Ok(crate::CLSID_FFmpegEncoder)
+        Ok(crate::CLSID_FFMPEG_ENCODER)
     }
 }
 

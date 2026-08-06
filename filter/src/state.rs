@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use windows::core::{Error, HRESULT, Interface, Weak};
+use windows::core::{Error, HRESULT, Weak};
 use windows::Win32::Media::DirectShow::*;
 use windows::Win32::Media::MediaFoundation::AM_MEDIA_TYPE;
 use windows::Win32::Media::IReferenceClock;

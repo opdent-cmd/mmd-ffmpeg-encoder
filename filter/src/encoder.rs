@@ -242,6 +242,14 @@ fn alpha_output_args(mode: AlphaMode, cfg: &Config, a: &mut Vec<String>) {
             if cfg.bitrate > 0 {
                 a.push("-b:v".into());
                 a.push(cfg.bitrate.to_string());
+                if cfg.rate_mode.eq_ignore_ascii_case("cbr") {
+                    a.push("-minrate".into());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-maxrate".into());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-bufsize".into());
+                    a.push((cfg.bitrate * 2).to_string());
+                }
             } else {
                 a.push("-crf".into());
                 a.push(if cfg.crf > 0 { cfg.crf } else { 18 }.to_string());
@@ -257,6 +265,14 @@ fn alpha_output_args(mode: AlphaMode, cfg: &Config, a: &mut Vec<String>) {
             if cfg.bitrate > 0 {
                 a.push("-b:v".into());
                 a.push(cfg.bitrate.to_string());
+                if cfg.rate_mode.eq_ignore_ascii_case("cbr") {
+                    a.push("-minrate".into());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-maxrate".into());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-bufsize".into());
+                    a.push((cfg.bitrate * 2).to_string());
+                }
             } else {
                 a.push("-crf".into());
                 a.push(if cfg.crf > 0 { cfg.crf } else { 30 }.to_string());
@@ -316,10 +332,44 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
         }
         a.push(cfg.preset.clone());
     }
+    let cbr = cfg.rate_mode.eq_ignore_ascii_case("cbr");
+    let have_bitrate = cfg.bitrate > 0;
     if gpu {
-        if cfg.bitrate > 0 {
-            a.push("-b:v".into());
-            a.push(cfg.bitrate.to_string());
+        if have_bitrate {
+            if cbr {
+                if nvenc {
+                    // NVENC CBR: explicit rate-control switch plus a VBV
+                    // buffer so the stream actually stays near the target.
+                    a.push("-rc".into());
+                    a.push("cbr".into());
+                    a.push("-b:v".into());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-maxrate".into());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-bufsize".into());
+                    a.push((cfg.bitrate * 2).to_string());
+                } else if amf {
+                    a.push("-rc".into());
+                    a.push("cbr".into());
+                    a.push("-b:v".into());
+                    a.push(cfg.bitrate.to_string());
+                } else {
+                    // QSV derives CBR from bitrate == maxrate.
+                    a.push("-b:v".into());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-maxrate".into());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-bufsize".into());
+                    a.push((cfg.bitrate * 2).to_string());
+                    a.push("-minrate".into());
+                    a.push(cfg.bitrate.to_string());
+                }
+            } else {
+                // VBR: average bitrate target; ffmpeg picks the encoder's
+                // variable-bitrate default when only -b:v is given.
+                a.push("-b:v".into());
+                a.push(cfg.bitrate.to_string());
+            }
         } else if nvenc {
             a.push("-qp".into());
             a.push("23".into());
@@ -332,9 +382,17 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
             a.push("-qp_p".into());
             a.push("23".into());
         }
-    } else if cfg.bitrate > 0 {
+    } else if have_bitrate {
         a.push("-b:v".into());
         a.push(cfg.bitrate.to_string());
+        if cbr {
+            a.push("-minrate".into());
+            a.push(cfg.bitrate.to_string());
+            a.push("-maxrate".into());
+            a.push(cfg.bitrate.to_string());
+            a.push("-bufsize".into());
+            a.push((cfg.bitrate * 2).to_string());
+        }
     } else if cfg.crf > 0 {
         a.push("-crf".into());
         a.push(cfg.crf.to_string());

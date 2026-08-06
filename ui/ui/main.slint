@@ -89,7 +89,7 @@ export component MainWindow inherits Window {
                 ComboBox {
                     current-index <=> root.rate-index;
                     enabled: root.alpha-index == 0;
-                    model: ["自动（质量优先）", "固定码率"];
+                    model: ["自动（质量优先）", "动态码率 (VBR)", "恒定码率 (CBR)"];
                 }
             }
             Row {
@@ -104,8 +104,8 @@ export component MainWindow inherits Window {
                     text <=> root.kbps-input;
                     input-type: InputType.number;
                     // Linked state: manual bitrate is only usable when the
-                    // rate mode is set to "固定码率".
-                    enabled: root.alpha-index == 0 && root.rate-index == 1;
+                    // rate mode is VBR or CBR.
+                    enabled: root.alpha-index == 0 && root.rate-index != 0;
                 }
             }
             Row {

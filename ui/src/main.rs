@@ -9,6 +9,7 @@ struct Config {
     preset: String,
     crf: i32,
     bitrate: i32,
+    rate_mode: String,
     extra: String,
     container: String,
     container_path: String,
@@ -22,10 +23,11 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             ffmpeg_path: "ffmpeg".to_string(),
-            codec: "h264_nvenc".to_string(),
-            preset: "p4".to_string(),
+            codec: "auto".to_string(),
+            preset: "veryfast".to_string(),
             crf: 18,
             bitrate: 0,
+            rate_mode: "crf".to_string(),
             extra: String::new(),
             container: "mp4".to_string(),
             container_path: String::new(),
@@ -77,6 +79,7 @@ fn load_config() -> Config {
             "video" if key == "preset" => cfg.preset = value,
             "video" if key == "crf" => cfg.crf = value.parse().unwrap_or(18),
             "video" if key == "bitrate" => cfg.bitrate = value.parse().unwrap_or(0),
+            "video" if key == "rate_mode" => cfg.rate_mode = value,
             "video" if key == "extra" => cfg.extra = value,
             "video" if key == "container" => cfg.container = value,
             "video" if key == "container_path" => cfg.container_path = value,
@@ -103,6 +106,8 @@ fn save_config(cfg: &Config) -> std::io::Result<()> {
          preset={}\n\
          crf={}\n\
          bitrate={}\n\
+         ; crf = quality-first, vbr = dynamic bitrate, cbr = constant bitrate\n\
+         rate_mode={}\n\
          extra={}\n\
          ; mp4 / mkv / mov / empty=AVI only\n\
          container={}\n\
@@ -117,6 +122,7 @@ fn save_config(cfg: &Config) -> std::io::Result<()> {
         cfg.preset,
         cfg.crf,
         cfg.bitrate,
+        cfg.rate_mode,
         cfg.extra,
         cfg.container,
         cfg.container_path,
@@ -275,7 +281,13 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.set_vendor_index(vendor_of(&cfg.codec) as i32);
     ui.set_codec_index(codec_of(&cfg.codec) as i32);
-    ui.set_rate_index(if cfg.bitrate > 0 { 1 } else { 0 });
+    ui.set_rate_index(if cfg.rate_mode == "cbr" {
+        2
+    } else if cfg.bitrate > 0 {
+        1
+    } else {
+        0
+    });
     ui.set_kbps_input(if cfg.bitrate > 0 {
         (cfg.bitrate / 1000).max(1).to_string().into()
     } else {
@@ -315,6 +327,15 @@ fn main() -> Result<(), slint::PlatformError> {
                 container_str(container).to_string(),
             )
         };
+        let rate_mode = if alpha != 0 {
+            "crf".to_string()
+        } else if rate == 2 {
+            "cbr".to_string()
+        } else if rate == 1 {
+            "vbr".to_string()
+        } else {
+            "crf".to_string()
+        };
         let mut cfg = Config {
             ffmpeg_path: detect_ffmpeg_path(),
             codec: codec_str.clone(),
@@ -322,11 +343,12 @@ fn main() -> Result<(), slint::PlatformError> {
             crf: 18,
             bitrate: if alpha != 0 {
                 0
-            } else if rate == 1 {
+            } else if rate == 1 || rate == 2 {
                 kbps * 1000
             } else {
                 0
             },
+            rate_mode,
             extra: String::new(),
             container: out_container,
             container_path: String::new(),

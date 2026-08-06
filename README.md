@@ -13,7 +13,7 @@ MMD 的 AVI Mux；同时 ffmpeg 用同一个编码流封装一份 MP4/MKV。
 - 硬件编码：自动检测（推荐）或手动指定 NVIDIA NVENC / Intel QSV /
   AMD AMF，没有可用 GPU 时自动回退 CPU（libx264/libx265）
 - 格式：H.264 / HEVC / AV1（不支持的硬件组合自动回退 CPU）
-- 固定码率（kbps 自填）或质量优先（CRF）
+- 码率模式：质量优先（CRF）/ 动态码率（VBR）/ 恒定码率（CBR），kbps 自填
 - 输出：MP4（默认）/ MKV / 传统 AVI，渲染后自动清理 AVI
 - 透明输出：WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1 无损)，
   保留 MMD 帧里的 Alpha 通道；透明格式统一走 CPU 编码
@@ -78,7 +78,7 @@ makensis installer\install.nsi
 - 硬件加速：自动（推荐）/ NVIDIA (NVENC) / Intel (QSV) / AMD (AMF) /
   不使用（CPU）
 - 编码格式：H.264 / HEVC / AV1
-- 码率：自动（质量优先）或固定码率（kbps）
+- 码率：质量优先（CRF）/ 动态码率（VBR）/ 恒定码率（CBR），kbps 自填
 - 输出：MP4（推荐）/ MKV / AVI（旧）
 - 透明输出：关闭 / WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1)
 

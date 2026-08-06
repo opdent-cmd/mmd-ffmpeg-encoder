@@ -46,6 +46,7 @@ Section "安装" SecMain
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "preset" "veryfast"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "crf" "18"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "bitrate" "0"
+  WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "rate_mode" "crf"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "extra" ""
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "container" "mp4"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "container_path" ""

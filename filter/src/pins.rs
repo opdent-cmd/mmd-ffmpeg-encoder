@@ -15,18 +15,6 @@ use crate::state::{
     Shared,
 };
 
-fn wide_string_to_rust(p: PCWSTR) -> String {
-    let mut s = String::new();
-    let mut i = 0usize;
-    unsafe {
-        while *p.0.add(i) != 0 {
-            s.push(char::from_u32(*p.0.add(i) as u32).unwrap_or('?'));
-            i += 1;
-        }
-    }
-    s
-}
-
 fn fill_ach_name(dst: &mut [u16; 128], name: &str) {
     let n = name.encode_utf16().take(127).collect::<Vec<u16>>();
     for (i, ch) in n.iter().enumerate() {
@@ -621,9 +609,7 @@ impl IPin_Impl for OutputPin_Impl {
         // so the real acceptance check is ReceiveConnection.
         let rc = unsafe { peer.ReceiveConnection(&self_pin, &mt) };
         debug_log(&format!("OutputPin::Connect ReceiveConnection hr={:08X}", hr_of(&rc)));
-        unsafe {
-            rc?;
-        }
+        rc?;
 
         let meminput: IMemInputPin = match peer.cast() {
             Ok(m) => m,
@@ -651,7 +637,7 @@ impl IPin_Impl for OutputPin_Impl {
                     "OutputPin::Connect NotifyAllocator(downstream) hr={:08X}",
                     hr_of(&na)
                 ));
-                unsafe { na? };
+                na?;
                 a
             }
             Err(e) if e.code() == E_NOTIMPL_HR => {
@@ -660,7 +646,7 @@ impl IPin_Impl for OutputPin_Impl {
                 unsafe { a.SetProperties(&req) }?;
                 let na = unsafe { meminput.NotifyAllocator(&a, false) };
                 debug_log(&format!("OutputPin::Connect NotifyAllocator hr={:08X}", hr_of(&na)));
-                unsafe { na? };
+                na?;
                 own_alloc = true;
                 a
             }

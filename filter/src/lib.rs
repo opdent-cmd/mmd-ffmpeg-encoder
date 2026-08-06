@@ -1,6 +1,7 @@
 //! FFmpeg DirectShow video compressor filter (Rust implementation).
 
 #![allow(non_snake_case)]
+#![allow(linker_messages)]
 
 mod alloc;
 mod config;
@@ -24,7 +25,7 @@ use windows::Win32::Media::DirectShow::*;
 use filter::Filter;
 use state::{CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_NOINTERFACE, E_POINTER, Shared};
 
-pub const CLSID_FFmpegEncoder: GUID = GUID::from_u128(0xD79D43B2_F005_40A4_BE18_AFD19C03E6E6);
+pub const CLSID_FFMPEG_ENCODER: GUID = GUID::from_u128(0xD79D43B2_F005_40A4_BE18_AFD19C03E6E6);
 
 const FILTER_NAME: &str = "FFmpeg Video Encoder (H.264/HEVC/AV1)";
 const CLSID_STR: &str = "{D79D43B2-F005-40A4-BE18-AFD19C03E6E6}";
@@ -82,9 +83,7 @@ impl IClassFactory_Impl for ClassFactory_Impl {
 
         let iid = unsafe { riid.as_ref() }.ok_or(E_POINTER)?;
         if *iid == IBaseFilter::IID || *iid == IUnknown::IID {
-            unsafe {
-                *ppv = raw as *mut c_void;
-            }
+            *ppv = raw as *mut c_void;
             Ok(())
         } else {
             unsafe {
@@ -115,9 +114,9 @@ pub unsafe extern "system" fn DllGetClassObject(
     };
     state::debug_log(&format!(
         "DllGetClassObject: rclsid={:08X}-{:04X}-{:04X} expected={:08X}",
-        rclsid.data1, rclsid.data2, rclsid.data3, CLSID_FFmpegEncoder.data1
+        rclsid.data1, rclsid.data2, rclsid.data3, CLSID_FFMPEG_ENCODER.data1
     ));
-    if *rclsid != CLSID_FFmpegEncoder {
+    if *rclsid != CLSID_FFMPEG_ENCODER {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
     let factory: IClassFactory = ClassFactory.into();
@@ -227,9 +226,9 @@ unsafe fn register_categories(b_register: bool) -> HRESULT {
                 unsafe { std::slice::from_raw_parts(clsid_wide.as_ptr() as *const u8, clsid_wide.len() * 2) };
             let name_bytes =
                 unsafe { std::slice::from_raw_parts(name_wide.as_ptr() as *const u8, name_wide.len() * 2) };
-            RegSetValueExW(hk, w!("CLSID"), None, REG_SZ, Some(clsid_bytes));
-            RegSetValueExW(hk, w!("FriendlyName"), None, REG_SZ, Some(name_bytes));
-            RegCloseKey(hk);
+            let _ = RegSetValueExW(hk, w!("CLSID"), None, REG_SZ, Some(clsid_bytes));
+            let _ = RegSetValueExW(hk, w!("FriendlyName"), None, REG_SZ, Some(name_bytes));
+            let _ = RegCloseKey(hk);
         } else {
             let p = wide(&instance_key);
             let _ = RegDeleteTreeW(HKEY_LOCAL_MACHINE, PCWSTR::from_raw(p.as_ptr()));
@@ -247,13 +246,13 @@ pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
     reg_set_string(hk, PCWSTR::null(), FILTER_NAME);
     let path = dll_path();
     let Some(hk_isp) = reg_create(hk, "InprocServer32") else {
-        RegCloseKey(hk);
+        let _ = RegCloseKey(hk);
         return HRESULT(0x80004005u32 as i32);
     };
     reg_set_string(hk_isp, PCWSTR::null(), &path);
     reg_set_string(hk_isp, w!("ThreadingModel"), "Both");
-    RegCloseKey(hk_isp);
-    RegCloseKey(hk);
+    let _ = RegCloseKey(hk_isp);
+    let _ = RegCloseKey(hk);
     register_categories(true)
 }
 
