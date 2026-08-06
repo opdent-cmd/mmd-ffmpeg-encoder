@@ -41,9 +41,6 @@ MMD 的 AVI Mux；同时 ffmpeg 用同一个编码流封装一份 MP4/MKV。
 └── LICENSE       GPL-3.0
 ```
 
-> 仓库不包含内部 C++ 测试/探针工具（`tools/` 仅存在于本地开发环境，
-> 已通过 `.gitignore` 排除）。
-
 ## 构建
 
 需要 Rust（stable）、Windows 10/11、VS Build Tools（C++ 链接）。
@@ -68,10 +65,6 @@ regsvr32 "target\release\ffmpeg_encoder.dll"
 ```powershell
 makensis installer\install.nsi
 ```
-
-> 安装包内的 ffmpeg（7.1 essentials，GPL build）体积约 87MB，不包含在本
-> 仓库中；发布安装包时从 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)
-> 获取并放入 `bin\` 后执行上述打包命令。
 
 ## 配置
 
