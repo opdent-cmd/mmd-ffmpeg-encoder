@@ -1,0 +1,293 @@
+slint::include_modules!();
+
+use std::path::{Path, PathBuf};
+
+#[derive(Clone)]
+struct Config {
+    ffmpeg_path: String,
+    codec: String,
+    preset: String,
+    crf: i32,
+    bitrate: i32,
+    extra: String,
+    container: String,
+    container_path: String,
+    debug: bool,
+    delete_avi: bool,
+    merge_audio: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            ffmpeg_path: "ffmpeg".to_string(),
+            codec: "h264_nvenc".to_string(),
+            preset: "p4".to_string(),
+            crf: 18,
+            bitrate: 0,
+            extra: String::new(),
+            container: "mp4".to_string(),
+            container_path: String::new(),
+            debug: false,
+            delete_avi: true,
+            merge_audio: true,
+        }
+    }
+}
+
+fn config_dir() -> PathBuf {
+    // Config lives next to this program (the install folder), so it is
+    // removed together with the app on uninstall.
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn config_file() -> PathBuf {
+    config_dir().join("FFmpegEncoder.ini")
+}
+
+fn load_config() -> Config {
+    let mut cfg = Config::default();
+    let Ok(text) = std::fs::read_to_string(config_file()) else {
+        return cfg;
+    };
+    let mut section = String::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            section = line[1..line.len() - 1].trim().to_ascii_lowercase();
+            continue;
+        }
+        let Some(eq) = line.find('=') else {
+            continue;
+        };
+        let key = line[..eq].trim().to_ascii_lowercase();
+        let value = line[eq + 1..].trim().to_string();
+        match section.as_str() {
+            "ffmpeg" if key == "path" => cfg.ffmpeg_path = value,
+            "ffmpeg" if key == "debug" => cfg.debug = value == "1",
+            "video" if key == "codec" => cfg.codec = value,
+            "video" if key == "preset" => cfg.preset = value,
+            "video" if key == "crf" => cfg.crf = value.parse().unwrap_or(18),
+            "video" if key == "bitrate" => cfg.bitrate = value.parse().unwrap_or(0),
+            "video" if key == "extra" => cfg.extra = value,
+            "video" if key == "container" => cfg.container = value,
+            "video" if key == "container_path" => cfg.container_path = value,
+            "video" if key == "delete_avi" => cfg.delete_avi = value == "1",
+            "video" if key == "merge_audio" => cfg.merge_audio = value == "1",
+            _ => {}
+        }
+    }
+    cfg
+}
+
+fn save_config(cfg: &Config) -> std::io::Result<()> {
+    std::fs::create_dir_all(config_dir())?;
+    let ini = format!(
+        "[ffmpeg]\n\
+         ; ffmpeg.exe path (auto-filled on save)\n\
+         path={}\n\
+         ; 1 = write debug log to %TEMP%\\ffmpeg_encoder_debug.log\n\
+         debug={}\n\
+         \n\
+         [video]\n\
+         codec={}\n\
+         preset={}\n\
+         crf={}\n\
+         bitrate={}\n\
+         extra={}\n\
+         ; mp4 / mkv / mov / empty=AVI only\n\
+         container={}\n\
+         container_path={}\n\
+         delete_avi={}\n\
+         merge_audio={}\n",
+        cfg.ffmpeg_path,
+        if cfg.debug { 1 } else { 0 },
+        cfg.codec,
+        cfg.preset,
+        cfg.crf,
+        cfg.bitrate,
+        cfg.extra,
+        cfg.container,
+        cfg.container_path,
+        if cfg.delete_avi { 1 } else { 0 },
+        if cfg.merge_audio { 1 } else { 0 },
+    );
+    std::fs::write(config_file(), ini)
+}
+
+fn codec_for(vendor: usize, codec: usize) -> &'static str {
+    let fmt = match codec {
+        0 => "264",
+        1 => "265",
+        _ => "av1",
+    };
+    match vendor {
+        0 => match fmt {
+            "264" => "h264_nvenc",
+            "265" => "hevc_nvenc",
+            _ => "av1_nvenc",
+        },
+        1 => match fmt {
+            "264" => "h264_qsv",
+            "265" => "hevc_qsv",
+            _ => "av1_qsv",
+        },
+        2 => match fmt {
+            "264" => "h264_amf",
+            "265" => "hevc_amf",
+            _ => "av1_amf",
+        },
+        _ => match fmt {
+            "264" => "libx264",
+            "265" => "libx265",
+            _ => "libaom-av1",
+        },
+    }
+}
+
+fn preset_for(codec: &str) -> &'static str {
+    if codec.contains("nvenc") {
+        "p4"
+    } else if codec.contains("amf") {
+        "balanced"
+    } else {
+        "veryfast"
+    }
+}
+
+fn vendor_of(codec: &str) -> usize {
+    if codec.contains("nvenc") {
+        0
+    } else if codec.contains("qsv") {
+        1
+    } else if codec.contains("amf") {
+        2
+    } else {
+        3
+    }
+}
+
+fn codec_of(codec: &str) -> usize {
+    if codec.contains("265") || codec.contains("hevc") {
+        1
+    } else if codec.contains("av1") || codec.contains("aom") {
+        2
+    } else {
+        0
+    }
+}
+
+fn container_of(cfg: &Config) -> usize {
+    match cfg.container.as_str() {
+        "" => 2,
+        "mkv" | "matroska" => 1,
+        _ => 0,
+    }
+}
+
+fn container_str(idx: usize) -> &'static str {
+    match idx {
+        0 => "mp4",
+        1 => "mkv",
+        _ => "",
+    }
+}
+
+/// The config UI lives next to ffmpeg.exe in the installed folder.
+fn detect_ffmpeg_path() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for cand in [dir.join("ffmpeg.exe"), dir.join("bin").join("ffmpeg.exe")] {
+                if cand.is_file() {
+                    return cand.to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+    "ffmpeg".to_string()
+}
+
+/// Compact path for the footer: "…\MMDFfmpegEncoder\FFmpegEncoder.ini".
+fn shorten_path(path: &str) -> String {
+    let p = Path::new(path);
+    let file = p
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent = p
+        .parent()
+        .and_then(|d| d.file_name())
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if file.is_empty() {
+        path.to_string()
+    } else if parent.is_empty() {
+        format!("…\\{}", file)
+    } else {
+        format!("…\\{}\\{}", parent, file)
+    }
+}
+
+fn main() -> Result<(), slint::PlatformError> {
+    let ui = MainWindow::new()?;
+    let cfg = load_config();
+
+    ui.set_vendor_index(vendor_of(&cfg.codec) as i32);
+    ui.set_codec_index(codec_of(&cfg.codec) as i32);
+    ui.set_rate_index(if cfg.bitrate > 0 { 1 } else { 0 });
+    ui.set_kbps_input(if cfg.bitrate > 0 {
+        (cfg.bitrate / 1000).max(1).to_string().into()
+    } else {
+        "8000".into()
+    });
+    ui.set_container_index(container_of(&cfg) as i32);
+    let config_full = config_file().to_string_lossy().to_string();
+    ui.set_config_path(config_full.clone().into());
+    ui.set_config_short(shorten_path(&config_full).into());
+
+    let weak = ui.as_weak();
+    ui.on_save_requested(move || {
+        let ui = weak.unwrap();
+        let vendor = ui.get_vendor_index().max(0) as usize;
+        let codec = ui.get_codec_index().max(0) as usize;
+        let rate = ui.get_rate_index().max(0) as usize;
+        let kbps: i32 = ui.get_kbps_input().trim().parse().unwrap_or(8000).max(1);
+        let container = ui.get_container_index().max(0) as usize;
+
+        let codec_str = codec_for(vendor, codec).to_string();
+        let mut cfg = Config {
+            ffmpeg_path: detect_ffmpeg_path(),
+            codec: codec_str.clone(),
+            preset: preset_for(&codec_str).to_string(),
+            crf: 18,
+            bitrate: if rate == 1 { kbps * 1000 } else { 0 },
+            extra: String::new(),
+            container: container_str(container).to_string(),
+            container_path: String::new(),
+            debug: false,
+            delete_avi: container != 2,
+            merge_audio: container != 2,
+        };
+        if cfg.ffmpeg_path == "ffmpeg" {
+            // Keep whatever path was configured before if we can't detect one.
+            let old = load_config();
+            cfg.ffmpeg_path = old.ffmpeg_path;
+        }
+        match save_config(&cfg) {
+            Ok(()) => {
+                ui.set_status_text("已保存 ✓ 下次 MMD 渲染时生效".into());
+            }
+            Err(e) => {
+                ui.set_status_text(format!("保存失败：{}", e).into());
+            }
+        }
+    });
+
+    ui.run()
+}

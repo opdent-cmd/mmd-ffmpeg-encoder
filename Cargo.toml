@@ -1,0 +1,9 @@
+[workspace]
+members = ["filter", "ui"]
+resolver = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

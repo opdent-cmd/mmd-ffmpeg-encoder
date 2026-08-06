@@ -1,0 +1,17 @@
+[package]
+name = "mmd_encoder_config"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[dependencies]
+slint = "1"
+
+[build-dependencies]
+slint-build = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

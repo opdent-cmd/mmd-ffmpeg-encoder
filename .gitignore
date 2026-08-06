@@ -1,0 +1,25 @@
+# Rust build output
+/target/
+
+# Installer / build artifacts
+/dist/
+*.exe
+*.dll
+*.pdb
+
+# Test media / logs
+*.avi
+*.mp4
+*.mkv
+*.log
+*.rgb
+*.png
+
+# Local config (never commit user settings)
+FFmpegEncoder.ini
+
+# IDE / OS
+.idea/
+.vscode/
+*.user
+Thumbs.db

@@ -1,0 +1,158 @@
+import { Button, ComboBox, LineEdit, Palette } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    title: "MMD FFmpeg 编码器配置";
+    width: 520px;
+    height: 470px;
+
+    // Force a light color scheme. Without this, Slint follows the Windows
+    // dark mode and renders white control text on the light window
+    // background, making the controls unreadable.
+    init => {
+        Palette.color-scheme= ColorScheme.light;
+    }
+    background: Palette.background;
+
+    // Bridge properties between the UI and the Rust side.
+    in-out property <int> vendor-index: 0;
+    in-out property <int> codec-index: 0;
+    in-out property <int> rate-index: 0;
+    in-out property <string> kbps-input: "8000";
+    in-out property <int> container-index: 1;
+    in-out property <string> status-text: "就绪";
+    in-out property <string> config-path: "";
+    in-out property <string> config-short: "";
+
+    callback save-requested;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 8px;
+
+        // Header
+        Text {
+            text: "MMD FFmpeg 视频编码器";
+            font-size: 18px;
+            font-weight: 700;
+            color: Palette.foreground;
+        }
+        Text {
+            text: "选好硬件和码率，保存后下次 MMD 渲染自动生效";
+            font-size: 12px;
+            color: #595959;
+        }
+
+        Rectangle { height: 1px; background: #e3e3e3; }
+
+        // Form: fixed right-aligned label column, controls share one
+        // vertical center axis and fill the remaining width.
+        GridLayout {
+            spacing: 12px;
+
+            Row {
+                Text {
+                    text: "硬件加速";
+                    min-width: 96px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    color: Palette.foreground;
+                }
+                ComboBox {
+                    current-index <=> root.vendor-index;
+                    model: ["NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "不使用（CPU）"];
+                }
+            }
+            Row {
+                Text {
+                    text: "编码格式";
+                    min-width: 96px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    color: Palette.foreground;
+                }
+                ComboBox {
+                    current-index <=> root.codec-index;
+                    model: ["H.264", "HEVC", "AV1"];
+                }
+            }
+            Row {
+                Text {
+                    text: "码率模式";
+                    min-width: 96px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    color: Palette.foreground;
+                }
+                ComboBox {
+                    current-index <=> root.rate-index;
+                    model: ["自动（质量优先）", "固定码率"];
+                }
+            }
+            Row {
+                Text {
+                    text: "码率 (kbps)";
+                    min-width: 96px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    color: Palette.foreground;
+                }
+                LineEdit {
+                    text <=> root.kbps-input;
+                    input-type: InputType.number;
+                    // Linked state: manual bitrate is only usable when the
+                    // rate mode is set to "固定码率".
+                    enabled: root.rate-index == 1;
+                }
+            }
+            Row {
+                Text {
+                    text: "输出文件";
+                    min-width: 96px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    color: Palette.foreground;
+                }
+                ComboBox {
+                    current-index <=> root.container-index;
+                    model: ["MP4（推荐，自动清理 AVI）", "MKV", "AVI（旧）"];
+                }
+            }
+        }
+
+        // Status + save button on the same line, tight to the form.
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: root.status-text;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                color: #1a7f37;
+                font-size: 13px;
+            }
+            Button {
+                text: "保存配置";
+                clicked => { save-requested(); }
+            }
+        }
+
+        Rectangle { height: 1px; background: #e3e3e3; }
+
+        // Footer: short path (full path in tooltip) + gentle hint text.
+        VerticalLayout {
+            spacing: 3px;
+            Text {
+                text: "配置文件：" + root.config-short;
+                font-size: 11px;
+                color: #737373;
+                Tooltip {
+                    Text { text: root.config-path; }
+                }
+            }
+            Text {
+                text: "提示：选 MP4/MKV 时，渲染完成会自动合并音轨并清理 .avi，只保留一个文件。";
+                font-size: 11px;
+                color: #737373;
+            }
+        }
+    }
+}
