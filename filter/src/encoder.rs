@@ -20,7 +20,35 @@ pub enum CodecKind {
     Other,
 }
 
-pub fn pick_fourcc_mux(codec: &str) -> (u32, &'static str) {
+#[derive(Clone, Copy, PartialEq)]
+pub enum AlphaMode {
+    WebmVp9,
+    WebmAv1,
+    MovProres,
+    MkvFfv1,
+}
+
+pub fn alpha_mode_of(alpha_format: &str) -> Option<AlphaMode> {
+    match alpha_format.to_ascii_lowercase().as_str() {
+        "webm_vp9" | "vp9" => Some(AlphaMode::WebmVp9),
+        "webm_av1" | "av1" => Some(AlphaMode::WebmAv1),
+        "mov_prores" | "prores" => Some(AlphaMode::MovProres),
+        "mkv_ffv1" | "ffv1" => Some(AlphaMode::MkvFfv1),
+        _ => None,
+    }
+}
+
+pub fn alpha_mode(cfg: &Config) -> Option<AlphaMode> {
+    alpha_mode_of(&cfg.alpha_format)
+}
+
+pub fn pick_fourcc_mux(codec: &str, alpha_format: &str) -> (u32, &'static str) {
+    // Transparent output always uses an H.264 elementary stream on the
+    // DirectShow/AVI side (the temporary AVI is deleted after rendering);
+    // the real transparent file is written in parallel by the same ffmpeg.
+    if alpha_mode_of(alpha_format).is_some() {
+        return (mmio_fourcc(b'H', b'2', b'6', b'4'), "h264");
+    }
     if codec.contains("264") || codec.contains("h264") || codec.contains("avc") {
         (mmio_fourcc(b'H', b'2', b'6', b'4'), "h264")
     } else if codec.contains("265") || codec.contains("hevc") || codec.contains("h265") {
@@ -41,63 +69,216 @@ pub fn pick_fourcc_mux(codec: &str) -> (u32, &'static str) {
 /// itself would otherwise only fail after the first frame arrives, which
 /// would hang our write side.
 pub fn codec_supported(cfg: &Config) -> bool {
-    let mut args: Vec<&str> = vec![
-        "-hide_banner",
-        "-loglevel",
-        "error",
+    probe_codec(cfg)
+}
+
+fn probe_codec(cfg: &Config) -> bool {
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "warning".into(),
     ];
-    if cfg.codec.contains("qsv") {
-        args.push("-init_hw_device");
-        args.push("qsv=hw");
-        args.push("-filter_hw_device");
-        args.push("hw");
+    if cfg.codec.contains("qsv") && alpha_mode(cfg).is_none() {
+        args.push("-init_hw_device".into());
+        args.push("qsv=hw".into());
+        args.push("-filter_hw_device".into());
+        args.push("hw".into());
     }
     args.extend([
-        "-f",
-        "lavfi",
-        "-i",
-        "color=black:s=160x120:r=30:d=1",
-        "-frames:v",
-        "1",
+        "-f".into(),
+        "lavfi".into(),
+        "-i".into(),
+        "color=black:s=160x120:r=30:d=1".into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-map".into(),
+        "0:v".into(),
     ]);
-    let probe_fmt = FormatInfo {
-        width: 160,
-        height: 120,
-        bpp: 24,
-        bottom_up: false,
-        pix_fmt: "bgr24".to_string(),
-        frame_dur: 333_333,
-    };
-    let mut codec_args: Vec<String> = Vec::new();
-    build_codec_args(cfg, &probe_fmt, &mut codec_args);
-    for a in &codec_args {
-        args.push(a);
+    if let Some(mode) = alpha_mode(cfg) {
+        alpha_output_args(mode, cfg, &mut args);
+    } else {
+        let probe_fmt = FormatInfo {
+            width: 160,
+            height: 120,
+            bpp: 24,
+            bottom_up: false,
+            pix_fmt: "bgr24".to_string(),
+            frame_dur: 333_333,
+        };
+        let mut codec_args: Vec<String> = Vec::new();
+        build_codec_args(cfg, &probe_fmt, &mut codec_args);
+        args.extend(codec_args);
     }
-    args.push("-f");
-    args.push("null");
-    args.push("-");
-    let mut cmd = Command::new(&cfg.ffmpeg_path);
-    cmd.args(&args)
+    args.push("-f".into());
+    args.push("null".into());
+    args.push("-".into());
+    run_probe(&cfg.ffmpeg_path, &args, &cfg.codec)
+}
+
+/// Spawn ffmpeg for a probe and wait up to 20 s. Some broken GPU drivers
+/// can hang ffmpeg forever; never block MMD on that.
+fn run_probe(ffmpeg_path: &str, args: &[String], label: &str) -> bool {
+    let mut cmd = Command::new(ffmpeg_path);
+    cmd.args(args)
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    let out = cmd.output();
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                crate::state::debug_log(&format!(
-                    "codec_supported {} failed: {}",
-                    cfg.codec,
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ));
-            }
-            o.status.success()
-        }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => {
-            crate::state::debug_log(&format!("codec_supported spawn failed: {}", e));
-            false
+            crate::state::debug_log(&format!(
+                "codec probe spawn failed ({}): {}",
+                label, e
+            ));
+            return false;
         }
+    };
+    let stderr = match child.stderr.take() {
+        Some(s) => s,
+        None => return false,
+    };
+    let err_text: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let et2 = err_text.clone();
+    std::thread::spawn(move || {
+        let mut r = stderr;
+        let mut buf = [0u8; 4096];
+        loop {
+            match r.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    et2
+                        .lock()
+                        .unwrap()
+                        .push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
+            }
+        }
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let _ = child.wait();
+                let text = err_text.lock().unwrap().clone();
+                // Some encoders silently fall back to a non-alpha pixel
+                // format when they do not support yuva* (e.g. libaom-av1).
+                // Treat that as unsupported so we fall back to an opaque
+                // CPU container instead of writing a "transparent" file
+                // without alpha.
+                let alpha_dropped = text.contains("Incompatible pixel format")
+                    || text.contains("auto-selecting format");
+                if !status.success() || alpha_dropped {
+                    crate::state::debug_log(&format!(
+                        "codec probe {} failed (alpha_dropped={}): {}",
+                        label,
+                        alpha_dropped,
+                        text.trim()
+                    ));
+                    return false;
+                }
+                return true;
+            }
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            crate::state::debug_log(&format!(
+                "codec probe {} timed out after 20s",
+                label
+            ));
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Resolve "auto*" codec names (written by the config UI's "自动（推荐）"
+/// option) to the first encoder this machine actually supports: NVENC ->
+/// QSV -> AMF -> CPU.
+pub fn resolve_codec(cfg: &Config) -> String {
+    let base = cfg.codec.trim().to_ascii_lowercase();
+    if !base.starts_with("auto") {
+        return cfg.codec.clone();
+    }
+    let candidates: &[&str] = if base.contains("265") || base.contains("hevc") {
+        &["hevc_nvenc", "hevc_qsv", "hevc_amf", "libx265"]
+    } else if base.contains("av1") {
+        &["av1_nvenc", "av1_qsv", "av1_amf", "libaom-av1"]
+    } else {
+        &["h264_nvenc", "h264_qsv", "h264_amf", "libx264"]
+    };
+    for c in candidates {
+        let mut probe = cfg.clone();
+        probe.codec = c.to_string();
+        if probe_codec(&probe) {
+            crate::state::debug_log(&format!("auto codec resolved to {}", c));
+            return c.to_string();
+        }
+    }
+    crate::state::debug_log("auto codec: no hardware encoder available, using CPU");
+    candidates.last().unwrap().to_string()
+}
+
+/// Encoder-side options for the transparent (alpha-capable) final file.
+/// These codecs are CPU-only in practice (libvpx/libaom/prores/ffv1), so no
+/// hardware device setup is needed.
+fn alpha_output_args(mode: AlphaMode, cfg: &Config, a: &mut Vec<String>) {
+    let (codec, pix_fmt) = match mode {
+        AlphaMode::WebmVp9 => ("libvpx-vp9", "yuva420p"),
+        AlphaMode::WebmAv1 => ("libaom-av1", "yuva420p"),
+        AlphaMode::MovProres => ("prores_ks", "yuva444p10le"),
+        AlphaMode::MkvFfv1 => ("ffv1", "yuva444p"),
+    };
+    a.push("-c:v".into());
+    a.push(codec.into());
+    a.push("-pix_fmt".into());
+    a.push(pix_fmt.into());
+    match mode {
+        AlphaMode::WebmVp9 => {
+            if cfg.bitrate > 0 {
+                a.push("-b:v".into());
+                a.push(cfg.bitrate.to_string());
+            } else {
+                a.push("-crf".into());
+                a.push(if cfg.crf > 0 { cfg.crf } else { 18 }.to_string());
+            }
+            a.push("-deadline".into());
+            a.push("good".into());
+            a.push("-cpu-used".into());
+            a.push("2".into());
+            a.push("-row-mt".into());
+            a.push("1".into());
+        }
+        AlphaMode::WebmAv1 => {
+            if cfg.bitrate > 0 {
+                a.push("-b:v".into());
+                a.push(cfg.bitrate.to_string());
+            } else {
+                a.push("-crf".into());
+                a.push(if cfg.crf > 0 { cfg.crf } else { 30 }.to_string());
+            }
+            a.push("-cpu-used".into());
+            a.push("6".into());
+            a.push("-row-mt".into());
+            a.push("1".into());
+        }
+        AlphaMode::MovProres => {
+            a.push("-profile:v".into());
+            a.push("4444".into());
+            a.push("-vendor".into());
+            a.push("apl0".into());
+        }
+        AlphaMode::MkvFfv1 => {
+            a.push("-level".into());
+            a.push("3".into());
+        }
+    }
+    for arg in cfg.extra.split_whitespace() {
+        a.push(arg.to_string());
     }
 }
 
@@ -214,11 +395,13 @@ fn tee_escape(path: &str) -> String {
 }
 
 pub fn build_args(cfg: &Config, fmt: &FormatInfo) -> Vec<String> {
-    let (_, mux) = pick_fourcc_mux(&cfg.codec);
-    let qsv = cfg.codec.contains("qsv");
+    let (_, mux) = pick_fourcc_mux(&cfg.codec, &cfg.alpha_format);
+    let alpha = alpha_mode(cfg);
+    let qsv = cfg.codec.contains("qsv") && alpha.is_none();
     let fps = 10_000_000.0 / fmt.frame_dur as f64;
 
     let mut a: Vec<String> = vec![
+        "-y".into(),
         "-hide_banner".into(),
         "-loglevel".into(),
         "error".into(),
@@ -244,26 +427,59 @@ pub fn build_args(cfg: &Config, fmt: &FormatInfo) -> Vec<String> {
         "-i".into(),
         "pipe:0".into(),
     ]);
-    build_codec_args(cfg, fmt, &mut a);
-    a.push("-map".into());
-    a.push("0:v".into());
-    if !cfg.container.is_empty() && !cfg.container_path.is_empty() {
-        // Dual output: the encoded stream goes to the extra container AND to
-        // our stdout as an elementary stream (for the DirectShow AVI Mux).
-        let fmt = container_format(&cfg.container);
-        let url = format!(
-            "[f={}:onfail=ignore]{}|[f={}]pipe\\:1",
-            fmt,
-            tee_escape(&cfg.container_path),
-            mux
-        );
+    if let Some(mode) = alpha {
+        // Transparent final file (WebM/MOV/MKV with alpha) ...
+        if fmt.bottom_up {
+            a.push("-vf".into());
+            a.push("vflip".into());
+        }
+        a.push("-map".into());
+        a.push("0:v".into());
+        alpha_output_args(mode, cfg, &mut a);
+        a.push(if cfg.container_path.is_empty() {
+            "transparent.out".into()
+        } else {
+            cfg.container_path.clone()
+        });
+        // ... plus an H.264 elementary stream on stdout for the DirectShow
+        // AVI Mux (the temporary AVI is deleted after rendering).
+        if fmt.bottom_up {
+            a.push("-vf".into());
+            a.push("vflip".into());
+        }
+        a.push("-map".into());
+        a.push("0:v".into());
+        a.push("-c:v".into());
+        a.push("libx264".into());
+        a.push("-preset".into());
+        a.push("ultrafast".into());
+        a.push("-pix_fmt".into());
+        a.push("yuv420p".into());
         a.push("-f".into());
-        a.push("tee".into());
-        a.push(url);
-    } else {
-        a.push("-f".into());
-        a.push(mux.to_string());
+        a.push("h264".into());
         a.push("pipe:1".into());
+    } else {
+        build_codec_args(cfg, fmt, &mut a);
+        a.push("-map".into());
+        a.push("0:v".into());
+        if !cfg.container.is_empty() && !cfg.container_path.is_empty() {
+            // Dual output: the encoded stream goes to the extra container AND
+            // to our stdout as an elementary stream (for the AVI Mux).
+            let fmt = container_format(&cfg.container);
+            let url = format!(
+                "[f={}:onfail=ignore]{}|[f={}]pipe\\:1",
+                fmt,
+                tee_escape(&cfg.container_path),
+                mux
+            );
+            a.push("-f".into());
+            a.push("tee".into());
+            a.push(url);
+        } else {
+            a.push("-f".into());
+            a.push(mux.to_string());
+            a.push("pipe:1".into());
+        }
     }
     a
 }
@@ -326,7 +542,7 @@ impl Encoder {
 
         // Give ffmpeg a moment to initialize; fail fast on early exit or an
         // encoder-open error in stderr instead of hanging on the pipe.
-        for _ in 0..20 {
+        for _ in 0..100 {
             match child.try_wait()? {
                 Some(status) => {
                     let _ = child.kill();
@@ -365,7 +581,7 @@ impl Encoder {
         })?;
 
         let packets: Arc<Mutex<VecDeque<Vec<u8>>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let (_, mux) = pick_fourcc_mux(&cfg.codec);
+        let (_, mux) = pick_fourcc_mux(&cfg.codec, &cfg.alpha_format);
         let kind = if mux == "h264" {
             CodecKind::H264
         } else if mux == "hevc" {

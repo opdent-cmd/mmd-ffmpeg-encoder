@@ -129,6 +129,48 @@ fn drain_deliver(shared: &Shared) {
     }
 }
 
+/// Called from Filter::Run once the encoder is ready: write any frames that
+/// arrived earlier, then deliver their packets and propagate a deferred
+/// EndOfStream if one was received before the encoder started.
+pub fn flush_pending(shared: &Shared) -> Result<()> {
+    let (frames, eos) = {
+        let mut core = shared.core.lock().unwrap();
+        let frames = core.pending_frames.drain(..).collect::<Vec<_>>();
+        let eos = core.eos_pending;
+        core.eos_pending = false;
+        (frames, eos)
+    };
+    debug_log(&format!(
+        "flush_pending frames={} eos={}",
+        frames.len(),
+        eos
+    ));
+    {
+        let mut enc = shared.encoder.lock().unwrap();
+        if let Some(e) = enc.as_mut() {
+            for f in &frames {
+                if let Err(ioe) = e.write_frame(f) {
+                    return Err(ioe.into());
+                }
+            }
+            if eos {
+                e.flush();
+                e.wait_reader(10000);
+            }
+        }
+    }
+    drain_deliver(shared);
+    if eos {
+        let out = shared.output.lock().unwrap();
+        if let Some(peer) = out.peer.as_ref() {
+            unsafe {
+                peer.EndOfStream()?;
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Input pin (IPin + IMemInputPin)
 // ---------------------------------------------------------------------------
@@ -315,6 +357,16 @@ impl IPin_Impl for InputPin_Impl {
     fn EndOfStream(&self) -> Result<()> {
         debug_log("InputPin::EndOfStream");
         self.shared.core.lock().unwrap().completed = true;
+        let has_encoder = self.shared.encoder.lock().unwrap().is_some();
+        if !has_encoder {
+            // The encoder is still starting (auto-detection/probing can take
+            // a couple of seconds). Hold the EOS until Run() flushes the
+            // buffered frames, otherwise the AVI Mux would finalize with an
+            // empty file.
+            self.shared.core.lock().unwrap().eos_pending = true;
+            debug_log("InputPin::EndOfStream deferred (encoder not ready)");
+            return Ok(());
+        }
         {
             let mut enc = self.shared.encoder.lock().unwrap();
             if let Some(e) = enc.as_mut() {
@@ -458,9 +510,21 @@ impl IMemInputPin_Impl for InputPin_Impl {
 
         {
             let mut enc = self.shared.encoder.lock().unwrap();
-            if let Some(e) = enc.as_mut() {
-                if let Err(ioe) = e.write_frame(frame) {
-                    return Err(ioe.into());
+            match enc.as_mut() {
+                Some(e) => {
+                    if let Err(ioe) = e.write_frame(frame) {
+                        return Err(ioe.into());
+                    }
+                }
+                None => {
+                    // Encoder not started yet: buffer the frame data so the
+                    // beginning of the render is not lost.
+                    self.shared
+                        .core
+                        .lock()
+                        .unwrap()
+                        .pending_frames
+                        .push(frame.to_vec());
                 }
             }
         }

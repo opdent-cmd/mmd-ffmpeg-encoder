@@ -123,6 +123,8 @@ impl IMediaFilter_Impl for Filter_Impl {
         core.started = false;
         core.ts_queue.clear();
         core.first_pkt = true;
+        core.pending_frames.clear();
+        core.eos_pending = false;
         core.state = State_Stopped;
         Ok(())
     }
@@ -137,6 +139,37 @@ impl IMediaFilter_Impl for Filter_Impl {
         let mut cfg = crate::config::load();
         crate::state::set_debug(cfg.debug);
         cfg.ffmpeg_path = crate::config::resolve_ffmpeg_path(&cfg);
+        // Mark the filter as running BEFORE any slow auto-detection or
+        // encoder probing. Frames may arrive while Run() is still setting
+        // things up; they are queued and delivered once ffmpeg is ready.
+        let (fourcc, mux) =
+            crate::encoder::pick_fourcc_mux(&cfg.codec, &cfg.alpha_format);
+        {
+            let mut core = self.shared.core.lock().unwrap();
+            core.fourcc = fourcc;
+            core.out_mux = mux.to_string();
+            core.codec = cfg.codec.clone();
+            core.started = true;
+            core.first_pkt = true;
+            core.ts_queue.clear();
+            core.state = State_Running;
+        }
+        if cfg.codec.trim().to_ascii_lowercase().starts_with("auto") {
+            let resolved = crate::encoder::resolve_codec(&cfg);
+            crate::state::debug_log(&format!(
+                "Filter::Run codec auto -> {}",
+                resolved
+            ));
+            cfg.codec = resolved.clone();
+            self.shared.core.lock().unwrap().codec = resolved.clone();
+            cfg.preset = if resolved.contains("nvenc") {
+                "p4".to_string()
+            } else if resolved.contains("amf") {
+                "balanced".to_string()
+            } else {
+                "veryfast".to_string()
+            };
+        }
         if !cfg.container.is_empty() && cfg.container_path.trim().is_empty() {
             if let Some(graph) = self.graph.lock().unwrap().clone() {
                 if let Some(avi) = find_sink_path(&graph) {
@@ -151,17 +184,6 @@ impl IMediaFilter_Impl for Filter_Impl {
                 }
             }
         }
-        let (fourcc, mux) = crate::encoder::pick_fourcc_mux(&cfg.codec);
-        {
-            let mut core = self.shared.core.lock().unwrap();
-            core.fourcc = fourcc;
-            core.out_mux = mux.to_string();
-            core.codec = cfg.codec.clone();
-            core.started = true;
-            core.first_pkt = true;
-            core.ts_queue.clear();
-            core.state = State_Running;
-        }
 
         let fmt = self.shared.core.lock().unwrap().fmt.clone();
         let Some(fmt) = fmt else {
@@ -169,18 +191,38 @@ impl IMediaFilter_Impl for Filter_Impl {
             return Ok(());
         };
 
-        let mut enc_guard = self.shared.encoder.lock().unwrap();
-        if enc_guard.is_none() {
-            let is_gpu = cfg.codec.contains("nvenc")
-                || cfg.codec.contains("amf")
-                || cfg.codec.contains("qsv");
+        {
+            let mut enc_guard = self.shared.encoder.lock().unwrap();
+            if enc_guard.is_none() {
+            let requested_alpha = crate::encoder::alpha_mode(&cfg).is_some();
             let mut effective = cfg.clone();
-            if is_gpu && !crate::encoder::codec_supported(&cfg) {
-                effective = crate::encoder::cpu_fallback(&cfg);
-                crate::state::debug_log(&format!(
-                    "Filter::Run GPU encoder unavailable, fell back to CPU codec {}",
-                    effective.codec
-                ));
+            if requested_alpha && !crate::encoder::codec_supported(&cfg) {
+                // Transparent encoder unavailable (e.g. an ffmpeg build
+                // without libvpx/libaom): fall back to an opaque MP4.
+                effective.alpha_format.clear();
+                effective.container = "mp4".to_string();
+                effective.codec = "libx264".to_string();
+                effective.preset = "veryfast".to_string();
+                if !effective.container_path.is_empty() {
+                    let fixed = replace_ext(&effective.container_path, "mp4");
+                    effective.container_path = fixed.clone();
+                    self.shared.core.lock().unwrap().extra_path = fixed;
+                }
+                crate::state::debug_log(
+                    "Filter::Run transparent codec unavailable; fell back to opaque MP4 (libx264)",
+                );
+            } else {
+                let is_gpu = !requested_alpha
+                    && (cfg.codec.contains("nvenc")
+                        || cfg.codec.contains("amf")
+                        || cfg.codec.contains("qsv"));
+                if is_gpu && !crate::encoder::codec_supported(&cfg) {
+                    effective = crate::encoder::cpu_fallback(&cfg);
+                    crate::state::debug_log(&format!(
+                        "Filter::Run GPU encoder unavailable, fell back to CPU codec {}",
+                        effective.codec
+                    ));
+                }
             }
             match crate::encoder::Encoder::start(&effective, &fmt) {
                 Ok(e) => {
@@ -192,6 +234,10 @@ impl IMediaFilter_Impl for Filter_Impl {
                     *enc_guard = Some(e);
                 }
                 Err(first_err) => {
+                    let is_gpu = !requested_alpha
+                        && (cfg.codec.contains("nvenc")
+                            || cfg.codec.contains("amf")
+                            || cfg.codec.contains("qsv"));
                     if is_gpu {
                         let cfg2 = crate::encoder::cpu_fallback(&cfg);
                         match crate::encoder::Encoder::start(&cfg2, &fmt) {
@@ -213,6 +259,36 @@ impl IMediaFilter_Impl for Filter_Impl {
                                 return Err(e2.into());
                             }
                         }
+                    } else if requested_alpha && !effective.alpha_format.is_empty() {
+                        let mut cfg2 = cfg.clone();
+                        cfg2.alpha_format.clear();
+                        cfg2.container = "mp4".to_string();
+                        cfg2.codec = "libx264".to_string();
+                        cfg2.preset = "veryfast".to_string();
+                        if !cfg2.container_path.is_empty() {
+                            let fixed = replace_ext(&cfg2.container_path, "mp4");
+                            cfg2.container_path = fixed.clone();
+                            self.shared.core.lock().unwrap().extra_path = fixed;
+                        }
+                        match crate::encoder::Encoder::start(&cfg2, &fmt) {
+                            Ok(e) => {
+                                crate::state::debug_log(&format!(
+                                    "Filter::Run transparent start failed ({}); fell back to opaque MP4 {}",
+                                    first_err,
+                                    cfg2.codec
+                                ));
+                                self.shared.core.lock().unwrap().codec = cfg2.codec.clone();
+                                *enc_guard = Some(e);
+                            }
+                            Err(e2) => {
+                                self.shared.core.lock().unwrap().started = false;
+                                crate::state::debug_log(&format!(
+                                    "Filter::Run Encoder::start failed (alpha: {}, cpu: {})",
+                                    first_err, e2
+                                ));
+                                return Err(e2.into());
+                            }
+                        }
                     } else {
                         self.shared.core.lock().unwrap().started = false;
                         crate::state::debug_log(&format!(
@@ -222,8 +298,12 @@ impl IMediaFilter_Impl for Filter_Impl {
                         return Err(first_err.into());
                     }
                 }
+                }
             }
         }
+        // The encoder is ready: flush any frames that arrived while it was
+        // still starting, and propagate a deferred EndOfStream.
+        crate::pins::flush_pending(&self.shared)?;
         {
             let out = self.shared.output.lock().unwrap();
             if let Some(a) = out.allocator.as_ref() {
@@ -378,51 +458,65 @@ fn merge_audio(cfg: &crate::config::Config, avi_path: &str, extra_path: &str) ->
         .map(|e| e.to_string_lossy().to_string())
         .unwrap_or_else(|| "mp4".to_string());
     let tmp = format!("{}.merge.{}", extra_path, ext);
-    let mut cmd = Command::new(&cfg.ffmpeg_path);
-    cmd.args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            extra_path,
-            "-i",
-            avi_path,
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0?",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
-            &tmp,
-        ])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    let out = cmd.output();
-    let ok = match out {
-        Ok(o) => {
-            if !o.status.success() {
-                crate::state::debug_log(&format!(
-                    "merge_audio ffmpeg failed: {}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ));
-            }
-            o.status.success()
-        }
-        Err(e) => {
-            crate::state::debug_log(&format!("merge_audio spawn failed: {}", e));
-            false
-        }
+    // WebM cannot carry AAC; try Opus first and fall back to Vorbis on
+    // builds without libopus. Other containers use AAC.
+    let audio_attempts: &[&str] = if ext == "webm" {
+        &["libopus", "libvorbis"]
+    } else {
+        &["aac"]
     };
-    if !ok {
+    let mut ok = false;
+    for audio_codec in audio_attempts {
+        let mut cmd = Command::new(&cfg.ffmpeg_path);
+        cmd.args([
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                extra_path,
+                "-i",
+                avi_path,
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0?",
+                "-c:v",
+                "copy",
+                "-c:a",
+                audio_codec,
+                "-b:a",
+                "192k",
+                "-shortest",
+                &tmp,
+            ])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let out = cmd.output();
+        ok = match out {
+            Ok(o) => {
+                if !o.status.success() {
+                    crate::state::debug_log(&format!(
+                        "merge_audio ffmpeg failed ({}): {}",
+                        audio_codec,
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    ));
+                }
+                o.status.success()
+            }
+            Err(e) => {
+                crate::state::debug_log(&format!("merge_audio spawn failed: {}", e));
+                false
+            }
+        };
+        if ok {
+            break;
+        }
         let _ = std::fs::remove_file(&tmp);
+    }
+    if !ok {
         return false;
     }
     let tmp_ok = std::path::Path::new(&tmp)

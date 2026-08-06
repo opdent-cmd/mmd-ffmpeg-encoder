@@ -12,6 +12,7 @@ struct Config {
     extra: String,
     container: String,
     container_path: String,
+    alpha_format: String,
     debug: bool,
     delete_avi: bool,
     merge_audio: bool,
@@ -28,6 +29,7 @@ impl Default for Config {
             extra: String::new(),
             container: "mp4".to_string(),
             container_path: String::new(),
+            alpha_format: String::new(),
             debug: false,
             delete_avi: true,
             merge_audio: true,
@@ -78,6 +80,7 @@ fn load_config() -> Config {
             "video" if key == "extra" => cfg.extra = value,
             "video" if key == "container" => cfg.container = value,
             "video" if key == "container_path" => cfg.container_path = value,
+            "video" if key == "alpha_format" => cfg.alpha_format = value,
             "video" if key == "delete_avi" => cfg.delete_avi = value == "1",
             "video" if key == "merge_audio" => cfg.merge_audio = value == "1",
             _ => {}
@@ -104,6 +107,8 @@ fn save_config(cfg: &Config) -> std::io::Result<()> {
          ; mp4 / mkv / mov / empty=AVI only\n\
          container={}\n\
          container_path={}\n\
+         ; transparent output: empty / webm_vp9 / webm_av1 / mov_prores / mkv_ffv1\n\
+         alpha_format={}\n\
          delete_avi={}\n\
          merge_audio={}\n",
         cfg.ffmpeg_path,
@@ -115,6 +120,7 @@ fn save_config(cfg: &Config) -> std::io::Result<()> {
         cfg.extra,
         cfg.container,
         cfg.container_path,
+        cfg.alpha_format,
         if cfg.delete_avi { 1 } else { 0 },
         if cfg.merge_audio { 1 } else { 0 },
     );
@@ -129,16 +135,21 @@ fn codec_for(vendor: usize, codec: usize) -> &'static str {
     };
     match vendor {
         0 => match fmt {
+            "264" => "auto",
+            "265" => "auto265",
+            _ => "autoav1",
+        },
+        1 => match fmt {
             "264" => "h264_nvenc",
             "265" => "hevc_nvenc",
             _ => "av1_nvenc",
         },
-        1 => match fmt {
+        2 => match fmt {
             "264" => "h264_qsv",
             "265" => "hevc_qsv",
             _ => "av1_qsv",
         },
-        2 => match fmt {
+        3 => match fmt {
             "264" => "h264_amf",
             "265" => "hevc_amf",
             _ => "av1_amf",
@@ -152,7 +163,9 @@ fn codec_for(vendor: usize, codec: usize) -> &'static str {
 }
 
 fn preset_for(codec: &str) -> &'static str {
-    if codec.contains("nvenc") {
+    if codec.starts_with("auto") {
+        "veryfast"
+    } else if codec.contains("nvenc") {
         "p4"
     } else if codec.contains("amf") {
         "balanced"
@@ -162,14 +175,16 @@ fn preset_for(codec: &str) -> &'static str {
 }
 
 fn vendor_of(codec: &str) -> usize {
-    if codec.contains("nvenc") {
+    if codec.starts_with("auto") {
         0
-    } else if codec.contains("qsv") {
+    } else if codec.contains("nvenc") {
         1
-    } else if codec.contains("amf") {
+    } else if codec.contains("qsv") {
         2
-    } else {
+    } else if codec.contains("amf") {
         3
+    } else {
+        4
     }
 }
 
@@ -196,6 +211,26 @@ fn container_str(idx: usize) -> &'static str {
         0 => "mp4",
         1 => "mkv",
         _ => "",
+    }
+}
+
+fn alpha_index_of(cfg: &Config) -> i32 {
+    match cfg.alpha_format.to_ascii_lowercase().as_str() {
+        "webm_vp9" | "vp9" => 1,
+        "mov_prores" | "prores" => 2,
+        "mkv_ffv1" | "ffv1" => 3,
+        // AV1 alpha is not available in the bundled libaom build.
+        "webm_av1" | "av1" => 0,
+        _ => 0,
+    }
+}
+
+fn alpha_str(idx: usize) -> &'static str {
+    match idx {
+        0 => "",
+        1 => "webm_vp9",
+        2 => "mov_prores",
+        _ => "mkv_ffv1",
     }
 }
 
@@ -247,6 +282,7 @@ fn main() -> Result<(), slint::PlatformError> {
         "8000".into()
     });
     ui.set_container_index(container_of(&cfg) as i32);
+    ui.set_alpha_index(alpha_index_of(&cfg));
     let config_full = config_file().to_string_lossy().to_string();
     ui.set_config_path(config_full.clone().into());
     ui.set_config_short(shorten_path(&config_full).into());
@@ -259,20 +295,45 @@ fn main() -> Result<(), slint::PlatformError> {
         let rate = ui.get_rate_index().max(0) as usize;
         let kbps: i32 = ui.get_kbps_input().trim().parse().unwrap_or(8000).max(1);
         let container = ui.get_container_index().max(0) as usize;
+        let alpha = ui.get_alpha_index().max(0) as usize;
 
-        let codec_str = codec_for(vendor, codec).to_string();
+        let (codec_str, out_container) = if alpha != 0 {
+            let c = match alpha {
+                1 => "libvpx-vp9",
+                2 => "prores_ks",
+                _ => "ffv1",
+            };
+            let cont = match alpha {
+                1 => "webm",
+                2 => "mov",
+                _ => "mkv",
+            };
+            (c.to_string(), cont.to_string())
+        } else {
+            (
+                codec_for(vendor, codec).to_string(),
+                container_str(container).to_string(),
+            )
+        };
         let mut cfg = Config {
             ffmpeg_path: detect_ffmpeg_path(),
             codec: codec_str.clone(),
             preset: preset_for(&codec_str).to_string(),
             crf: 18,
-            bitrate: if rate == 1 { kbps * 1000 } else { 0 },
+            bitrate: if alpha != 0 {
+                0
+            } else if rate == 1 {
+                kbps * 1000
+            } else {
+                0
+            },
             extra: String::new(),
-            container: container_str(container).to_string(),
+            container: out_container,
             container_path: String::new(),
+            alpha_format: alpha_str(alpha).to_string(),
             debug: false,
-            delete_avi: container != 2,
-            merge_audio: container != 2,
+            delete_avi: !(alpha == 0 && container == 2),
+            merge_audio: !(alpha == 0 && container == 2),
         };
         if cfg.ffmpeg_path == "ffmpeg" {
             // Keep whatever path was configured before if we can't detect one.

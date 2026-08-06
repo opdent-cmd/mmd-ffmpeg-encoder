@@ -61,6 +61,12 @@ pub struct Core {
     pub last_ts: i64,
     pub state: FILTER_STATE,
     pub completed: bool,
+    // Frames that arrive before the ffmpeg child is ready. They are written
+    // as soon as the encoder starts, so no leading frames are lost.
+    pub pending_frames: Vec<Vec<u8>>,
+    // EndOfStream arrived before the encoder was started; propagate it to
+    // the AVI Mux only after the buffered frames have been flushed.
+    pub eos_pending: bool,
     pub avi_path: String,
     pub extra_path: String,
 }
@@ -90,6 +96,8 @@ impl Shared {
                 last_ts: 0,
                 state: State_Stopped,
                 completed: false,
+                pending_frames: Vec::new(),
+                eos_pending: false,
                 avi_path: String::new(),
                 extra_path: String::new(),
             }),
@@ -121,10 +129,11 @@ pub fn debug_log(msg: &str) {
     if !debug_enabled() {
         return;
     }
+    let log_path = std::env::temp_dir().join("ffmpeg_encoder_debug.log");
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("C:\\Users\\Administrator\\AppData\\Local\\Temp\\ffmpeg_encoder_debug.log")
+        .open(log_path)
     {
         let _ = writeln!(f, "{}", msg);
     }

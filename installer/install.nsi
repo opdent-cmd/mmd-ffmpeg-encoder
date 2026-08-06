@@ -42,13 +42,14 @@ Section "安装" SecMain
   ; Default ini next to the filter DLL (fallback when the user never opens UI).
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "ffmpeg" "path" "$INSTDIR\bin\ffmpeg.exe"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "ffmpeg" "debug" "0"
-  WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "codec" "h264_nvenc"
-  WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "preset" "p4"
+  WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "codec" "auto"
+  WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "preset" "veryfast"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "crf" "18"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "bitrate" "0"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "extra" ""
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "container" "mp4"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "container_path" ""
+  WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "alpha_format" ""
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "delete_avi" "1"
   WriteINIStr "$INSTDIR\FFmpegEncoder.ini" "video" "merge_audio" "1"
 

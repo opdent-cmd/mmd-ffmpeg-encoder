@@ -62,7 +62,7 @@ impl IClassFactory_Impl for ClassFactory_Impl {
             // The output pin negotiates its media type before Run(), so the
             // codec/fourcc must be known from the start.
             let cfg = config::load();
-            let (fourcc, mux) = encoder::pick_fourcc_mux(&cfg.codec);
+            let (fourcc, mux) = encoder::pick_fourcc_mux(&cfg.codec, &cfg.alpha_format);
             let mut core = shared.core.lock().unwrap();
             core.fourcc = fourcc;
             core.out_mux = mux.to_string();

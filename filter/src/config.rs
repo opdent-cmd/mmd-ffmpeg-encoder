@@ -25,6 +25,10 @@ pub struct Config {
     // Empty = off. container_path empty = auto (same name as the AVI file).
     pub container: String,
     pub container_path: String,
+    // Transparent output mode. Empty = off. When set, the final container
+    // carries the alpha channel from the input frames (WebM VP9/AV1,
+    // MOV ProRes 4444, MKV FFV1). The intermediate AVI stream stays H.264.
+    pub alpha_format: String,
     // Remove the MMD-generated .avi after a successful render when the extra
     // container file exists. AVI is only kept as a fallback on failure/cancel.
     pub delete_avi: bool,
@@ -99,6 +103,7 @@ pub fn load() -> Config {
         debug: false,
         container: String::new(),
         container_path: String::new(),
+        alpha_format: String::new(),
         delete_avi: true,
         merge_audio: true,
     };
@@ -153,6 +158,7 @@ pub fn load() -> Config {
             }
             "video" if key == "container" => cfg.container = value,
             "video" if key == "container_path" => cfg.container_path = value,
+            "video" if key == "alpha_format" => cfg.alpha_format = value,
             "video" if key == "delete_avi" => {
                 cfg.delete_avi = value == "1" || value.eq_ignore_ascii_case("true")
             }
