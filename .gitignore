@@ -15,6 +15,9 @@
 *.rgb
 *.png
 
+# Internal test/probe tools (kept local, never distributed)
+/tools/
+
 # Local config (never commit user settings)
 FFmpegEncoder.ini
 

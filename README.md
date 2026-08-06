@@ -37,10 +37,12 @@ MMD 的 AVI Mux；同时 ffmpeg 用同一个编码流封装一份 MP4/MKV。
 │   ├── src/      ini 读写、编码器映射
 │   └── ui/       界面定义（main.slint）
 ├── installer/    NSIS 安装脚本
-├── tools/        内部 C++ 测试/探针工具（需 DirectShow baseclasses）
 ├── Cargo.toml    workspace
 └── LICENSE       GPL-3.0
 ```
+
+> 仓库不包含内部 C++ 测试/探针工具（`tools/` 仅存在于本地开发环境，
+> 已通过 `.gitignore` 排除）。
 
 ## 构建
 
