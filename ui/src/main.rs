@@ -106,7 +106,7 @@ fn save_config(cfg: &Config) -> std::io::Result<()> {
          preset={}\n\
          crf={}\n\
          bitrate={}\n\
-         ; crf = quality-first, vbr = dynamic bitrate, cbr = constant bitrate\n\
+         ; crf = quality-first, vbr = dynamic bitrate\n\
          rate_mode={}\n\
          extra={}\n\
          ; mp4 / mkv / mov / empty=AVI only\n\
@@ -281,9 +281,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.set_vendor_index(vendor_of(&cfg.codec) as i32);
     ui.set_codec_index(codec_of(&cfg.codec) as i32);
-    ui.set_rate_index(if cfg.rate_mode == "cbr" {
-        2
-    } else if cfg.bitrate > 0 {
+    ui.set_rate_index(if cfg.rate_mode == "cbr" || cfg.bitrate > 0 {
         1
     } else {
         0
@@ -335,8 +333,6 @@ fn main() -> Result<(), slint::PlatformError> {
         };
         let rate_mode = if alpha != 0 {
             "crf".to_string()
-        } else if rate == 2 {
-            "cbr".to_string()
         } else if rate == 1 {
             "vbr".to_string()
         } else {
@@ -349,7 +345,7 @@ fn main() -> Result<(), slint::PlatformError> {
             crf: 18,
             bitrate: if alpha != 0 {
                 0
-            } else if rate == 1 || rate == 2 {
+            } else if rate == 1 {
                 kbps * 1000
             } else {
                 0

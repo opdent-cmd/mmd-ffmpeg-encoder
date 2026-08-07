@@ -13,12 +13,13 @@ MMD 的 AVI Mux；同时 ffmpeg 用同一个编码流封装一份 MP4/MKV。
 - 硬件编码：自动检测（推荐）或手动指定 NVIDIA NVENC / Intel QSV /
   AMD AMF，没有可用 GPU 时自动回退 CPU（libx264/libx265）
 - 格式：H.264 / HEVC / AV1（不支持的硬件组合自动回退 CPU）
-- 码率模式：质量优先（CRF）/ 动态码率（VBR）/ 恒定码率（CBR），kbps 自填
+- 码率模式：质量优先（CRF）/ 动态码率（VBR），kbps 自填
 - 输出：MP4（默认）/ MKV / 传统 AVI，渲染后自动清理 AVI
 - 透明输出：WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1 无损)，
   保留 MMD 帧里的 Alpha 通道；透明格式统一走 CPU 编码
 - 自动把 MMD AVI 里的音轨无损合并进 MP4（AAC）
 - 重复渲染同名文件时自动覆盖，不会因旧文件存在而失败
+- 出错自动在系统临时目录写日志并用记事本打开，方便排查闪退/编码失败
 - 图形化配置界面（Rust + Slint）
 - Windows 安装包（NSIS，约 27MB，内含 ffmpeg 7.1）
 - 编码器与驱动不兼容时自动降级 CPU，不卡死、不崩溃
@@ -73,7 +74,7 @@ makensis installer\install.nsi
 - 硬件加速：自动（推荐）/ NVIDIA (NVENC) / Intel (QSV) / AMD (AMF) /
   不使用（CPU）
 - 编码格式：H.264 / HEVC / AV1
-- 码率：质量优先（CRF）/ 动态码率（VBR）/ 恒定码率（CBR），kbps 自填
+- 码率：质量优先（CRF）/ 动态码率（VBR），kbps 自填
 - 输出：MP4（推荐）/ MKV / AVI（旧）
 - 透明输出：关闭 / WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1)
 

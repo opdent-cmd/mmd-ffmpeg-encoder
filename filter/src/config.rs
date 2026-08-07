@@ -181,5 +181,10 @@ pub fn load() -> Config {
             "crf".to_string()
         };
     }
+    // CBR was removed (NVENC HEVC could not reliably pin the target on all
+    // GPUs); old configurations degrade to VBR instead of being ignored.
+    if cfg.rate_mode.eq_ignore_ascii_case("cbr") {
+        cfg.rate_mode = "vbr".to_string();
+    }
     cfg
 }

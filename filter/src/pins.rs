@@ -138,7 +138,16 @@ pub fn flush_pending(shared: &Shared) -> Result<()> {
         if let Some(e) = enc.as_mut() {
             for f in &frames {
                 if let Err(ioe) = e.write_frame(f) {
-                    return Err(ioe.into());
+                    if !crate::state::report_failure(&format!(
+                        "flush_pending write_frame failed: {}",
+                        ioe
+                    )) {
+                        crate::state::debug_log("flush_pending write_frame failed (already reported)");
+                    }
+                    // The encoder is dead. Drop the remaining buffered
+                    // frames instead of failing the graph, so MMD does not
+                    // hang on an error it may not handle.
+                    break;
                 }
             }
             if eos {
@@ -501,7 +510,16 @@ impl IMemInputPin_Impl for InputPin_Impl {
             match enc.as_mut() {
                 Some(e) => {
                     if let Err(ioe) = e.write_frame(frame) {
-                        return Err(ioe.into());
+                        if !crate::state::report_failure(&format!(
+                            "InputPin::Receive write_frame failed: {}",
+                            ioe
+                        )) {
+                            crate::state::debug_log(
+                                "InputPin::Receive write_frame failed (already reported)",
+                            );
+                        }
+                        // Encoder is dead; drop this frame and let the graph
+                        // finish cleanly (the failure is already shown).
                     }
                 }
                 None => {
@@ -631,14 +649,14 @@ impl IPin_Impl for OutputPin_Impl {
         } else {
             30.0
         };
-        let cbr_frame_bytes = if cfg.bitrate > 0 {
+        let bitrate_frame_bytes = if cfg.bitrate > 0 {
             (((cfg.bitrate as f64 / 8.0) / fps) * 2.0) as i32
         } else {
             0
         };
         let req = ALLOCATOR_PROPERTIES {
             cBuffers: 8,
-            cbBuffer: uncompressed.max(cbr_frame_bytes).max(65536),
+            cbBuffer: uncompressed.max(bitrate_frame_bytes).max(65536),
             cbAlign: 1,
             cbPrefix: 0,
         };

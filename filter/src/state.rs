@@ -124,19 +124,109 @@ pub fn err(hr: HRESULT) -> windows::core::Error {
     Error::from_hresult(hr)
 }
 
-pub fn debug_log(msg: &str) {
+fn log_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("MMDFfmpegEncoder")
+}
+
+pub fn log_path() -> std::path::PathBuf {
+    log_dir().join("ffmpeg_encoder.log")
+}
+
+fn marker_path() -> std::path::PathBuf {
+    log_dir().join("render_active.marker")
+}
+
+/// Always write an important lifecycle/error event to the log file, even
+/// when verbose debug logging is disabled.
+pub fn always_log(msg: &str) {
     use std::io::Write;
-    if !debug_enabled() {
+    let dir = log_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let log_path = std::env::temp_dir().join("ffmpeg_encoder_debug.log");
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_path)
+        .open(log_dir().join("ffmpeg_encoder.log"))
     {
         let _ = writeln!(f, "{}", msg);
     }
+}
+
+/// Verbose per-frame logging; only written when debug=1 in the ini.
+pub fn debug_log(msg: &str) {
+    if debug_enabled() {
+        always_log(msg);
+    }
+}
+
+/// Open the log file in Notepad so the user can see what happened.
+pub fn show_error_log() {
+    use std::os::windows::process::CommandExt;
+    let path = log_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path);
+    let _ = std::process::Command::new("notepad.exe")
+        .arg(&path)
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .spawn();
+}
+
+static FAILURE_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Report a fatal/render failure: always log it and open Notepad once per
+/// render (reset by Filter::Run).
+pub fn reset_failure_report() {
+    FAILURE_REPORTED.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Returns true on the first report of this render (Notepad is opened once);
+/// later reports only append to the log.
+pub fn report_failure(msg: &str) -> bool {
+    always_log(msg);
+    let first = !FAILURE_REPORTED.swap(true, std::sync::atomic::Ordering::SeqCst);
+    if first {
+        always_log("Opening log in Notepad for the user.");
+        show_error_log();
+    }
+    first
+}
+
+/// Spawn a hidden watchdog that waits for the host process to exit. If the
+/// render marker still exists at that point, the process died/crashed before
+/// a clean Filter::Stop, so the log is opened in Notepad.
+pub fn start_crash_watcher() {
+    use std::os::windows::process::CommandExt;
+    let pid = std::process::id();
+    let dir = log_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let marker = marker_path();
+    let log = log_path();
+    let _ = std::fs::write(&marker, format!("pid={}\n", pid));
+    let marker_s = marker.to_string_lossy().replace('\'', "''");
+    let log_s = log.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "try {{ Wait-Process -Id {pid} -ErrorAction SilentlyContinue }} catch {{}}; if (Test-Path -LiteralPath '{marker}') {{ Start-Process -FilePath notepad.exe -ArgumentList '{log}' }}",
+        pid = pid,
+        marker = marker_s,
+        log = log_s
+    );
+    let _ = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .spawn();
+}
+
+/// Remove the render-active marker after a clean stop so the crash watcher
+/// stays quiet.
+pub fn clear_crash_marker() {
+    let _ = std::fs::remove_file(marker_path());
 }
 
 static DEBUG_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

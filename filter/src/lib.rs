@@ -13,7 +13,7 @@ mod pins;
 mod state;
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use windows::core::*;
 use windows::Win32::Foundation::{ERROR_SUCCESS, HMODULE};
@@ -33,6 +33,16 @@ const CAT_VIDEO_COMPRESSOR: &str = "{33d9a760-90c8-11d0-bd43-00a0c911ce86}";
 const CAT_DIRECTSHOW_FILTERS: &str = "{860bb310-5d01-11d0-bd3b-00a0c911ce86}";
 
 static ACTIVE: AtomicI32 = AtomicI32::new(0);
+static PANIC_HOOK_SET: AtomicBool = AtomicBool::new(false);
+
+fn ensure_panic_hook() {
+    if !PANIC_HOOK_SET.swap(true, Ordering::SeqCst) {
+        std::panic::set_hook(Box::new(|info| {
+            crate::state::always_log(&format!("PANIC: {}", info));
+            crate::state::show_error_log();
+        }));
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Class factory
@@ -109,6 +119,7 @@ pub unsafe extern "system" fn DllGetClassObject(
     riid: *const GUID,
     ppv: *mut *mut c_void,
 ) -> HRESULT {
+    ensure_panic_hook();
     let Some(rclsid) = (unsafe { rclsid.as_ref() }) else {
         return HRESULT(0x80004003u32 as i32); // E_POINTER
     };

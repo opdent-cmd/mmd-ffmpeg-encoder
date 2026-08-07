@@ -87,8 +87,8 @@ impl IMediaFilter_Impl for Filter_Impl {
                         merged
                     ));
                     if !merged {
-                        crate::state::debug_log(
-                            "Filter::Stop keeping AVI: audio merge failed",
+                        crate::state::report_failure(
+                            "Filter::Stop audio merge failed; keeping AVI",
                         );
                         return Ok(());
                     }
@@ -104,6 +104,10 @@ impl IMediaFilter_Impl for Filter_Impl {
                             avi_path, e
                         )),
                     }
+                } else if !extra_ok {
+                    crate::state::report_failure(
+                        "Filter::Stop no output file was produced",
+                    );
                 } else {
                     crate::state::debug_log(
                         "Filter::Stop keeping AVI (delete disabled or extra missing)",
@@ -111,6 +115,9 @@ impl IMediaFilter_Impl for Filter_Impl {
                 }
             }
         }
+        // A clean stop means the render finished (or was cancelled by the
+        // user); keep the crash watcher quiet.
+        crate::state::clear_crash_marker();
         {
             let out = self.shared.output.lock().unwrap();
             if let Some(a) = out.allocator.as_ref() {
@@ -135,7 +142,9 @@ impl IMediaFilter_Impl for Filter_Impl {
     }
 
     fn Run(&self, _tstart: i64) -> Result<()> {
-        crate::state::debug_log("Filter::Run enter");
+        crate::state::reset_failure_report();
+        crate::state::always_log("Filter::Run enter");
+        crate::state::start_crash_watcher();
         let mut cfg = crate::config::load();
         crate::state::set_debug(cfg.debug);
         cfg.ffmpeg_path = crate::config::resolve_ffmpeg_path(&cfg);
@@ -252,10 +261,11 @@ impl IMediaFilter_Impl for Filter_Impl {
                             }
                             Err(e2) => {
                                 self.shared.core.lock().unwrap().started = false;
-                                crate::state::debug_log(&format!(
-                                    "Filter::Run Encoder::start failed (nvenc: {}, cpu: {})",
+                                crate::state::report_failure(&format!(
+                                    "Filter::Run Encoder::start failed (gpu: {}, cpu: {})",
                                     first_err, e2
                                 ));
+                                crate::state::clear_crash_marker();
                                 return Err(e2.into());
                             }
                         }
@@ -282,19 +292,21 @@ impl IMediaFilter_Impl for Filter_Impl {
                             }
                             Err(e2) => {
                                 self.shared.core.lock().unwrap().started = false;
-                                crate::state::debug_log(&format!(
+                                crate::state::report_failure(&format!(
                                     "Filter::Run Encoder::start failed (alpha: {}, cpu: {})",
                                     first_err, e2
                                 ));
+                                crate::state::clear_crash_marker();
                                 return Err(e2.into());
                             }
                         }
                     } else {
                         self.shared.core.lock().unwrap().started = false;
-                        crate::state::debug_log(&format!(
+                        crate::state::report_failure(&format!(
                             "Filter::Run Encoder::start failed: {}",
                             first_err
                         ));
+                        crate::state::clear_crash_marker();
                         return Err(first_err.into());
                     }
                 }
