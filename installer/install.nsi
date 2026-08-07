@@ -10,7 +10,7 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !define APP_NAME "MMD FFmpeg 编码器"
-!define APP_VERSION "1.1.0"
+!define APP_VERSION "1.1.1"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MMDFfmpegEncoder"
 
 !insertmacro MUI_PAGE_WELCOME

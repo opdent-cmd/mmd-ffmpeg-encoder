@@ -305,7 +305,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let vendor = ui.get_vendor_index().max(0) as usize;
         let codec = ui.get_codec_index().max(0) as usize;
         let rate = ui.get_rate_index().max(0) as usize;
-        let kbps: i32 = ui.get_kbps_input().trim().parse().unwrap_or(8000).max(1);
+        let kbps: i32 = ui
+            .get_kbps_input()
+            .trim()
+            .parse()
+            .unwrap_or(8000)
+            .max(1)
+            .min(400_000);
         let container = ui.get_container_index().max(0) as usize;
         let alpha = ui.get_alpha_index().max(0) as usize;
 

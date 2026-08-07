@@ -243,12 +243,17 @@ fn alpha_output_args(mode: AlphaMode, cfg: &Config, a: &mut Vec<String>) {
                 a.push("-b:v".into());
                 a.push(cfg.bitrate.to_string());
                 if cfg.rate_mode.eq_ignore_ascii_case("cbr") {
+                    // libvpx/libaom do not pad to the target on easy
+                    // content, but the VBV constraints still keep the
+                    // bitrate as close as the encoder allows.
                     a.push("-minrate".into());
                     a.push(cfg.bitrate.to_string());
                     a.push("-maxrate".into());
                     a.push(cfg.bitrate.to_string());
                     a.push("-bufsize".into());
-                    a.push((cfg.bitrate * 2).to_string());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-lag-in-frames".into());
+                    a.push("0".into());
                 }
             } else {
                 a.push("-crf".into());
@@ -271,7 +276,9 @@ fn alpha_output_args(mode: AlphaMode, cfg: &Config, a: &mut Vec<String>) {
                     a.push("-maxrate".into());
                     a.push(cfg.bitrate.to_string());
                     a.push("-bufsize".into());
-                    a.push((cfg.bitrate * 2).to_string());
+                    a.push(cfg.bitrate.to_string());
+                    a.push("-lag-in-frames".into());
+                    a.push("0".into());
                 }
             } else {
                 a.push("-crf".into());
@@ -338,16 +345,19 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
         if have_bitrate {
             if cbr {
                 if nvenc {
-                    // NVENC CBR: explicit rate-control switch plus a VBV
-                    // buffer so the stream actually stays near the target.
+                    // NVENC CBR: both -rc cbr and the legacy -cbr flag keep
+                    // the stream pinned to the target on different driver
+                    // generations; a 1-second VBV buffer makes it tight.
                     a.push("-rc".into());
                     a.push("cbr".into());
+                    a.push("-cbr".into());
+                    a.push("1".into());
                     a.push("-b:v".into());
                     a.push(cfg.bitrate.to_string());
                     a.push("-maxrate".into());
                     a.push(cfg.bitrate.to_string());
                     a.push("-bufsize".into());
-                    a.push((cfg.bitrate * 2).to_string());
+                    a.push(cfg.bitrate.to_string());
                 } else if amf {
                     a.push("-rc".into());
                     a.push("cbr".into());
@@ -360,7 +370,7 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
                     a.push("-maxrate".into());
                     a.push(cfg.bitrate.to_string());
                     a.push("-bufsize".into());
-                    a.push((cfg.bitrate * 2).to_string());
+                    a.push(cfg.bitrate.to_string());
                     a.push("-minrate".into());
                     a.push(cfg.bitrate.to_string());
                 }
@@ -392,6 +402,23 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
             a.push(cfg.bitrate.to_string());
             a.push("-bufsize".into());
             a.push((cfg.bitrate * 2).to_string());
+            let kbps = cfg.bitrate / 1000;
+            if cfg.codec.contains("264") && !cfg.codec.contains("265") {
+                // x264 only truly pins to the target (including padding on
+                // easy/static scenes) when HRD CBR signalling is enabled.
+                a.push("-x264-params".into());
+                a.push(format!(
+                    "nal-hrd=cbr:vbv-maxrate={}:vbv-bufsize={}",
+                    kbps,
+                    kbps * 2
+                ));
+            } else if cfg.codec.contains("265") {
+                a.push("-x265-params".into());
+                a.push(format!(
+                    "strict-cbr=1:vbv-maxrate={}:vbv-bufsize={}",
+                    kbps, kbps
+                ));
+            }
         }
     } else if cfg.crf > 0 {
         a.push("-crf".into());

@@ -586,9 +586,9 @@ impl IPin_Impl for OutputPin_Impl {
             let fmt = core.fmt.as_ref().ok_or(err(VFW_E_NOT_CONNECTED))?;
             let fourcc = core.fourcc;
             let mt = mediatype::make_output_type(fmt, fourcc);
-            (mt, fmt.width, fmt.height, fmt.bpp)
+            (mt, fmt.width, fmt.height, fmt.bpp, fmt.frame_dur)
         };
-        let (mut mt, width, height, bpp) = built;
+        let (mut mt, width, height, bpp, frame_dur) = built;
 
         if !pmt.is_null() {
             let proposed = unsafe { pmt.as_ref() }.ok_or(err(E_POINTER))?;
@@ -620,9 +620,25 @@ impl IPin_Impl for OutputPin_Impl {
             }
         };
 
+        // The output buffer must fit the largest compressed sample. High
+        // CBR targets can produce I-frames far larger than the uncompressed
+        // frame (e.g. 85 Mbps at 320x240 ~= 350 KB/frame vs 230 KB raw), so
+        // size the allocator from the configured bitrate as well.
+        let cfg = crate::config::load();
+        let uncompressed = width * height * ((bpp / 8) as i32);
+        let fps = if frame_dur > 0 {
+            10_000_000.0 / frame_dur as f64
+        } else {
+            30.0
+        };
+        let cbr_frame_bytes = if cfg.bitrate > 0 {
+            (((cfg.bitrate as f64 / 8.0) / fps) * 2.0) as i32
+        } else {
+            0
+        };
         let req = ALLOCATOR_PROPERTIES {
             cBuffers: 8,
-            cbBuffer: (width * height * ((bpp / 8) as i32)).max(65536),
+            cbBuffer: uncompressed.max(cbr_frame_bytes).max(65536),
             cbAlign: 1,
             cbPrefix: 0,
         };
