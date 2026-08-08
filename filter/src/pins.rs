@@ -67,6 +67,17 @@ fn deliver_packet(shared: &Shared, data: Vec<u8>) -> Result<()> {
     let conn = shared.output.lock().unwrap();
     let allocator = conn.allocator.as_ref().ok_or(err(VFW_E_NOT_CONNECTED))?;
     let meminput = conn.meminput.as_ref().ok_or(err(VFW_E_NOT_CONNECTED))?;
+    // Never write past the downstream allocator's buffers: that corrupts the
+    // AVI Mux heap and can surface later as a NULL deref inside quartz.
+    let cb_buffer = conn.cb_buffer;
+    if cb_buffer > 0 && data.len() as i32 > cb_buffer {
+        crate::state::always_log(&format!(
+            "deliver_packet dropped {} bytes (downstream buffer is {})",
+            data.len(),
+            cb_buffer
+        ));
+        return Ok(());
+    }
 
     let mut sample: Option<IMediaSample> = None;
     unsafe {
@@ -158,13 +169,29 @@ pub fn flush_pending(shared: &Shared) -> Result<()> {
     }
     drain_deliver(shared);
     if eos {
-        let out = shared.output.lock().unwrap();
-        if let Some(peer) = out.peer.as_ref() {
-            unsafe {
-                peer.EndOfStream()?;
-            }
+        send_eos_to_peer(shared)?;
+    }
+    Ok(())
+}
+
+/// Forward EndOfStream to the downstream peer exactly once. Some sources
+/// (MMD's DIB Sequential + SampleGrabber chain) can deliver EOS multiple
+/// times; a second EOS into the AVI Mux is invalid and has been observed to
+/// crash quartz with a NULL dereference.
+fn send_eos_to_peer(shared: &Shared) -> Result<()> {
+    {
+        let core = shared.core.lock().unwrap();
+        if core.eos_sent {
+            return Ok(());
         }
     }
+    let out = shared.output.lock().unwrap();
+    if let Some(peer) = out.peer.as_ref() {
+        unsafe {
+            peer.EndOfStream()?;
+        }
+    }
+    shared.core.lock().unwrap().eos_sent = true;
     Ok(())
 }
 
@@ -353,7 +380,14 @@ impl IPin_Impl for InputPin_Impl {
 
     fn EndOfStream(&self) -> Result<()> {
         debug_log("InputPin::EndOfStream");
-        self.shared.core.lock().unwrap().completed = true;
+        {
+            let mut core = self.shared.core.lock().unwrap();
+            core.completed = true;
+            if core.eos_sent {
+                debug_log("InputPin::EndOfStream ignored (already sent)");
+                return Ok(());
+            }
+        }
         let has_encoder = self.shared.encoder.lock().unwrap().is_some();
         if !has_encoder {
             // The encoder is still starting (auto-detection/probing can take
@@ -376,13 +410,7 @@ impl IPin_Impl for InputPin_Impl {
                 }
             }
         }
-        let out = self.shared.output.lock().unwrap();
-        if let Some(peer) = out.peer.as_ref() {
-            unsafe {
-                peer.EndOfStream()?;
-            }
-        }
-        Ok(())
+        send_eos_to_peer(&self.shared)
     }
 
     fn BeginFlush(&self) -> Result<()> {
@@ -397,6 +425,9 @@ impl IPin_Impl for InputPin_Impl {
             let mut core = self.shared.core.lock().unwrap();
             core.ts_queue.clear();
             core.first_pkt = true;
+            core.pending_frames.clear();
+            core.eos_pending = false;
+            core.eos_sent = false;
         }
         let out = self.shared.output.lock().unwrap();
         if let Some(peer) = out.peer.as_ref() {
@@ -420,6 +451,7 @@ impl IPin_Impl for InputPin_Impl {
 
     fn NewSegment(&self, tstart: i64, tstop: i64, drate: f64) -> Result<()> {
         debug_log(&format!("InputPin::NewSegment {}-{} rate={}", tstart, tstop, drate));
+        self.shared.core.lock().unwrap().eos_sent = false;
         let out = self.shared.output.lock().unwrap();
         if let Some(peer) = out.peer.as_ref() {
             unsafe {
@@ -660,6 +692,7 @@ impl IPin_Impl for OutputPin_Impl {
             cbAlign: 1,
             cbPrefix: 0,
         };
+        conn.cb_buffer = req.cbBuffer;
 
         let mut own_alloc = false;
         let allocator = match unsafe { meminput.GetAllocator() } {

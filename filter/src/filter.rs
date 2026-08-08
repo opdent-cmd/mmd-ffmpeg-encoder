@@ -135,6 +135,7 @@ impl IMediaFilter_Impl for Filter_Impl {
         core.first_pkt = true;
         core.pending_frames.clear();
         core.eos_pending = false;
+        core.eos_sent = false;
         core.state = State_Stopped;
         Ok(())
     }
@@ -153,6 +154,7 @@ impl IMediaFilter_Impl for Filter_Impl {
             core.started = true;
             core.first_pkt = true;
             core.ts_queue.clear();
+            core.eos_sent = false;
             core.state = State_Running;
         }
         crate::state::reset_failure_report();

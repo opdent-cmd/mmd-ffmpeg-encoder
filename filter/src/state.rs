@@ -26,6 +26,9 @@ pub struct PinConn {
     pub allocator: Option<IMemAllocator>,
     pub own_alloc: bool,
     pub mt: Option<AM_MEDIA_TYPE>,
+    // Negotiated output buffer size (bytes). Used to reject samples that
+    // would overflow the downstream allocator instead of corrupting it.
+    pub cb_buffer: i32,
 }
 
 impl PinConn {
@@ -36,6 +39,7 @@ impl PinConn {
             allocator: None,
             own_alloc: false,
             mt: None,
+            cb_buffer: 0,
         }
     }
 
@@ -44,6 +48,7 @@ impl PinConn {
         self.meminput = None;
         self.allocator = None;
         self.own_alloc = false;
+        self.cb_buffer = 0;
         if let Some(mut mt) = self.mt.take() {
             unsafe { crate::mediatype::free_mt(&mut mt) };
         }
@@ -67,6 +72,11 @@ pub struct Core {
     // EndOfStream arrived before the encoder was started; propagate it to
     // the AVI Mux only after the buffered frames have been flushed.
     pub eos_pending: bool,
+    // EndOfStream has already been forwarded to the downstream peer once.
+    // DirectShow graphs (e.g. MMD's SampleGrabber chain) can deliver EOS
+    // more than once; forwarding it twice corrupts the AVI Mux and can crash
+    // quartz with a NULL dereference.
+    pub eos_sent: bool,
     pub avi_path: String,
     pub extra_path: String,
 }
@@ -98,6 +108,7 @@ impl Shared {
                 completed: false,
                 pending_frames: Vec::new(),
                 eos_pending: false,
+                eos_sent: false,
                 avi_path: String::new(),
                 extra_path: String::new(),
             }),
