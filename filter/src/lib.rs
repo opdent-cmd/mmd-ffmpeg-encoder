@@ -63,12 +63,51 @@ impl IClassFactory_Impl for ClassFactory_Impl {
             punkouter.is_null(),
             unsafe { riid.as_ref().map(|g| g.data1) }
         ));
+        // Never let an internal Rust panic take down the host (MMD). The
+        // release profile used panic=abort, which killed the whole process
+        // right here when something went wrong and left no trace beyond the
+        // CreateInstance log line. Catch instead, log the panic, and return
+        // E_FAIL so MMD shows an error instead of crashing.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.create_instance_inner(punkouter, riid, ppvobject)
+        }));
+        match result {
+            Ok(r) => r,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic payload".to_string());
+                state::always_log(&format!(
+                    "CreateInstance PANIC caught: {}",
+                    msg
+                ));
+                Err(state::err(crate::state::E_FAIL))
+            }
+        }
+    }
+
+    fn LockServer(&self, _flock: BOOL) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl ClassFactory_Impl {
+    fn create_instance_inner(
+        &self,
+        punkouter: Ref<'_, IUnknown>,
+        riid: *const GUID,
+        ppvobject: *mut *mut c_void,
+    ) -> Result<()> {
         if !punkouter.is_null() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
         let ppv = unsafe { ppvobject.as_mut() }.ok_or(E_POINTER)?;
 
+        state::always_log("CreateInstance: Shared::new");
         let shared = Shared::new();
+        state::always_log("CreateInstance: config::load");
         {
             // The output pin negotiates its media type before Run(), so the
             // codec/fourcc must be known from the start.
@@ -82,11 +121,13 @@ impl IClassFactory_Impl for ClassFactory_Impl {
             core.out_mux = mux.to_string();
             core.codec = cfg.codec.clone();
         }
+        state::always_log("CreateInstance: Filter::new");
         let filter = Filter::new(shared.clone());
         let base: IBaseFilter = filter.into();
         let weak = base.downgrade()?;
         *shared.filter.lock().unwrap() = Some(weak);
 
+        state::always_log("CreateInstance: make_pins");
         let (input, output) = filter::make_pins(shared.clone());
         *shared.input_pin.lock().unwrap() = Some(input);
         *shared.output_pin.lock().unwrap() = Some(output.clone());
@@ -96,6 +137,7 @@ impl IClassFactory_Impl for ClassFactory_Impl {
 
         let iid = unsafe { riid.as_ref() }.ok_or(E_POINTER)?;
         if *iid == IBaseFilter::IID || *iid == IUnknown::IID {
+            state::always_log("CreateInstance: returning interface");
             *ppv = raw as *mut c_void;
             Ok(())
         } else {
@@ -105,10 +147,6 @@ impl IClassFactory_Impl for ClassFactory_Impl {
             ACTIVE.fetch_sub(1, Ordering::SeqCst);
             Err(E_NOINTERFACE.into())
         }
-    }
-
-    fn LockServer(&self, _flock: BOOL) -> Result<()> {
-        Ok(())
     }
 }
 

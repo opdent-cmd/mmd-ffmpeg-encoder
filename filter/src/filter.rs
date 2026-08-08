@@ -368,6 +368,7 @@ impl IMediaFilter_Impl for Filter_Impl {
 
 impl IBaseFilter_Impl for Filter_Impl {
     fn EnumPins(&self) -> Result<IEnumPins> {
+        crate::state::always_log("IBaseFilter::EnumPins");
         let input = self.shared.input_pin.lock().unwrap().clone();
         let output = self.shared.output_pin.lock().unwrap().clone();
         let mut v = Vec::new();
@@ -381,6 +382,7 @@ impl IBaseFilter_Impl for Filter_Impl {
     }
 
     fn FindPin(&self, id: &PCWSTR) -> Result<IPin> {
+        crate::state::always_log("IBaseFilter::FindPin");
         let mut s = String::new();
         let mut i = 0usize;
         unsafe {
@@ -409,6 +411,7 @@ impl IBaseFilter_Impl for Filter_Impl {
     }
 
     fn QueryFilterInfo(&self, pinfo: *mut FILTER_INFO) -> Result<()> {
+        crate::state::always_log("IBaseFilter::QueryFilterInfo");
         let mut info = FILTER_INFO::default();
         fill_ach_name(&mut info.achName, FILTER_NAME);
         info.pGraph = core::mem::ManuallyDrop::new(self.graph.lock().unwrap().clone());
@@ -419,6 +422,7 @@ impl IBaseFilter_Impl for Filter_Impl {
     }
 
     fn JoinFilterGraph(&self, pgraph: Ref<'_, IFilterGraph>, _pname: &PCWSTR) -> Result<()> {
+        crate::state::always_log("IBaseFilter::JoinFilterGraph");
         if pgraph.is_null() {
             *self.graph.lock().unwrap() = None;
         } else {
