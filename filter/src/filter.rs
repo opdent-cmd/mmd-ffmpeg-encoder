@@ -145,6 +145,16 @@ impl IMediaFilter_Impl for Filter_Impl {
     }
 
     fn Run(&self, _tstart: i64) -> Result<()> {
+        // Mark the filter as running FIRST. Frames can arrive while Run()
+        // is still loading the config or probing encoders; they are queued
+        // in pending_frames and delivered once ffmpeg is ready.
+        {
+            let mut core = self.shared.core.lock().unwrap();
+            core.started = true;
+            core.first_pkt = true;
+            core.ts_queue.clear();
+            core.state = State_Running;
+        }
         crate::state::reset_failure_report();
         crate::state::always_log("Filter::Run enter");
         crate::state::start_crash_watcher();
@@ -164,9 +174,6 @@ impl IMediaFilter_Impl for Filter_Impl {
             cfg.merge_audio,
             cfg.ffmpeg_path
         ));
-        // Mark the filter as running BEFORE any slow auto-detection or
-        // encoder probing. Frames may arrive while Run() is still setting
-        // things up; they are queued and delivered once ffmpeg is ready.
         let (fourcc, mux) =
             crate::encoder::pick_fourcc_mux(&cfg.codec, &cfg.alpha_format);
         {
@@ -174,10 +181,6 @@ impl IMediaFilter_Impl for Filter_Impl {
             core.fourcc = fourcc;
             core.out_mux = mux.to_string();
             core.codec = cfg.codec.clone();
-            core.started = true;
-            core.first_pkt = true;
-            core.ts_queue.clear();
-            core.state = State_Running;
         }
         if cfg.codec.trim().to_ascii_lowercase().starts_with("auto") {
             let resolved = crate::encoder::resolve_codec(&cfg);

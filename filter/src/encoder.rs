@@ -363,7 +363,7 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
 /// CPU fallback config for when a GPU encoder is unavailable.
 pub fn cpu_fallback(cfg: &Config) -> Config {
     let mut c = cfg.clone();
-    c.codec = if cfg.codec.contains("265") {
+    c.codec = if cfg.codec.contains("265") || cfg.codec.contains("hevc") {
         "libx265".to_string()
     } else if cfg.codec.contains("av1") {
         "libaom-av1".to_string()
@@ -466,18 +466,41 @@ pub fn build_args(cfg: &Config, fmt: &FormatInfo) -> Vec<String> {
         a.push("-map".into());
         a.push("0:v".into());
         if !cfg.container.is_empty() && !cfg.container_path.is_empty() {
-            // Dual output: the encoded stream goes to the extra container AND
-            // to our stdout as an elementary stream (for the AVI Mux).
-            let fmt = container_format(&cfg.container);
-            let url = format!(
-                "[f={}:onfail=ignore]{}|[f={}]pipe\\:1",
-                fmt,
-                tee_escape(&cfg.container_path),
-                mux
-            );
-            a.push("-f".into());
-            a.push("tee".into());
-            a.push(url);
+            let fmt_name = container_format(&cfg.container);
+            let direct = fmt_name == "matroska" || fmt_name == "mov" || fmt_name == "webm";
+            if direct {
+                // Some muxers (matroska/mov/webm) fail as tee slaves, so
+                // write the container directly and produce the AVI-side
+                // elementary stream as a second output.
+                a.push(cfg.container_path.clone());
+                if fmt.bottom_up {
+                    a.push("-vf".into());
+                    a.push("vflip".into());
+                }
+                a.push("-map".into());
+                a.push("0:v".into());
+                a.push("-c:v".into());
+                a.push("libx264".into());
+                a.push("-preset".into());
+                a.push("ultrafast".into());
+                a.push("-pix_fmt".into());
+                a.push("yuv420p".into());
+                a.push("-f".into());
+                a.push("h264".into());
+                a.push("pipe:1".into());
+            } else {
+                // Dual output via tee: the encoded stream goes to the extra
+                // container AND to our stdout as an elementary stream.
+                let url = format!(
+                    "[f={}:onfail=ignore]{}|[f={}]pipe\\:1",
+                    fmt_name,
+                    tee_escape(&cfg.container_path),
+                    mux
+                );
+                a.push("-f".into());
+                a.push("tee".into());
+                a.push(url);
+            }
         } else {
             a.push("-f".into());
             a.push(mux.to_string());
@@ -889,5 +912,127 @@ mod tests {
         ab.feed(&[0, 0, 0], &mut out);
         ab.finish(&mut out);
         assert!(out.is_empty());
+    }
+
+    fn test_cfg() -> Config {
+        Config {
+            ffmpeg_path: "ffmpeg".to_string(),
+            codec: "libx264".to_string(),
+            preset: "veryfast".to_string(),
+            crf: 18,
+            bitrate: 0,
+            rate_mode: "crf".to_string(),
+            extra: String::new(),
+            out_lsample: 0,
+            out_cbextra: 0,
+            out_bisizeimage: 0,
+            out_bitrate: 0,
+            out_fourcc: String::new(),
+            out_rcsource_zero: false,
+            debug: false,
+            container: String::new(),
+            container_path: String::new(),
+            alpha_format: String::new(),
+            delete_avi: true,
+            merge_audio: true,
+        }
+    }
+
+    fn test_fmt() -> FormatInfo {
+        FormatInfo {
+            width: 320,
+            height: 240,
+            bpp: 24,
+            bottom_up: false,
+            pix_fmt: "bgr24".to_string(),
+            frame_dur: 333_333,
+        }
+    }
+
+    #[test]
+    fn vbr_nvenc_uses_plain_bitrate() {
+        let mut c = test_cfg();
+        c.codec = "h264_nvenc".to_string();
+        c.rate_mode = "vbr".to_string();
+        c.bitrate = 8_000_000;
+        c.container = "mp4".to_string();
+        c.container_path = "C:/out.mp4".to_string();
+        let args = build_args(&c, &test_fmt());
+        let joined = args.join(" ");
+        assert!(joined.contains("-b:v 8000000"), "args: {}", joined);
+        assert!(!joined.contains("-rc cbr"), "no CBR rc: {}", joined);
+        assert!(!joined.contains("-cbr 1"), "no legacy cbr flag: {}", joined);
+        assert!(!joined.contains("-x264-params"), "no x264 params: {}", joined);
+    }
+
+    #[test]
+    fn crf_cpu_uses_quality() {
+        let c = test_cfg();
+        let args = build_args(&c, &test_fmt());
+        let joined = args.join(" ");
+        assert!(joined.contains("-crf 18"), "args: {}", joined);
+        assert!(!joined.contains("-b:v"), "no bitrate: {}", joined);
+    }
+
+    #[test]
+    fn alpha_vp9_has_two_outputs_and_alpha() {
+        let mut c = test_cfg();
+        c.alpha_format = "webm_vp9".to_string();
+        c.container = "webm".to_string();
+        c.container_path = "C:/out.webm".to_string();
+        let args = build_args(&c, &test_fmt());
+        let joined = args.join(" ");
+        assert!(joined.contains("-c:v libvpx-vp9"), "args: {}", joined);
+        assert!(joined.contains("-pix_fmt yuva420p"), "alpha pix fmt: {}", joined);
+        assert!(joined.contains("C:/out.webm"), "container path: {}", joined);
+        assert!(joined.contains("-f h264 pipe:1"), "avi-side stream: {}", joined);
+    }
+
+    #[test]
+    fn alpha_prores_uses_4444_profile() {
+        let mut c = test_cfg();
+        c.alpha_format = "mov_prores".to_string();
+        c.container = "mov".to_string();
+        c.container_path = "C:/out.mov".to_string();
+        let args = build_args(&c, &test_fmt());
+        let joined = args.join(" ");
+        assert!(joined.contains("-c:v prores_ks"), "args: {}", joined);
+        assert!(joined.contains("-profile:v 4444"), "prores 4444: {}", joined);
+        assert!(joined.contains("yuva444p10le"), "alpha: {}", joined);
+    }
+
+    #[test]
+    fn alpha_ffv1_uses_yuva444p() {
+        let mut c = test_cfg();
+        c.alpha_format = "mkv_ffv1".to_string();
+        c.container = "mkv".to_string();
+        c.container_path = "C:/out.mkv".to_string();
+        let args = build_args(&c, &test_fmt());
+        let joined = args.join(" ");
+        assert!(joined.contains("-c:v ffv1"), "args: {}", joined);
+        assert!(joined.contains("yuva444p"), "alpha: {}", joined);
+    }
+
+    #[test]
+    fn alpha_uses_h264_fourcc_for_avi_side() {
+        let mut c = test_cfg();
+        c.alpha_format = "webm_vp9".to_string();
+        let (fourcc, mux) = pick_fourcc_mux(&c.codec, &c.alpha_format);
+        assert_eq!(mux, "h264");
+        assert_ne!(fourcc, 0);
+    }
+
+    #[test]
+    fn cpu_fallback_maps_codec_family() {
+        let mut c = test_cfg();
+        c.codec = "hevc_nvenc".to_string();
+        let f = cpu_fallback(&c);
+        assert_eq!(f.codec, "libx265");
+        c.codec = "av1_nvenc".to_string();
+        let f = cpu_fallback(&c);
+        assert_eq!(f.codec, "libaom-av1");
+        c.codec = "h264_qsv".to_string();
+        let f = cpu_fallback(&c);
+        assert_eq!(f.codec, "libx264");
     }
 }
