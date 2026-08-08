@@ -235,8 +235,53 @@ pub fn debug_enabled() -> bool {
     DEBUG_ON.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static LOG_VIEWER: std::sync::Mutex<Option<std::process::Child>> =
+    std::sync::Mutex::new(None);
+
+/// Open a visible console window that tails the log file in real time.
+/// Only one viewer is started per process.
+pub fn start_log_viewer() {
+    let mut guard = LOG_VIEWER.lock().unwrap();
+    if guard.is_some() {
+        return;
+    }
+    let path = log_path();
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path);
+    let path_s = path.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "$Host.UI.RawUI.WindowTitle='MMD FFmpeg 编码器 - 实时日志'; Get-Content -LiteralPath '{path_s}' -Wait -Tail 200 -Encoding UTF8",
+        path_s = path_s
+    );
+    match std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", &script])
+        .spawn()
+    {
+        Ok(child) => {
+            *guard = Some(child);
+        }
+        Err(_) => {
+            // No console available; the log file still captures everything.
+        }
+    }
+}
+
+pub fn stop_log_viewer() {
+    if let Some(mut child) = LOG_VIEWER.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 pub fn set_debug(enabled: bool) {
     DEBUG_ON.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    if enabled {
+        start_log_viewer();
+    } else {
+        stop_log_viewer();
+    }
 }
 
 pub const E_POINTER: HRESULT = HRESULT(0x80004003u32 as i32);

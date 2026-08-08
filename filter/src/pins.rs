@@ -190,7 +190,7 @@ impl IPin_Impl for InputPin_Impl {
     }
 
     fn ReceiveConnection(&self, pconnector: Ref<'_, IPin>, pmt: *const AM_MEDIA_TYPE) -> Result<()> {
-        debug_log(&format!(
+        crate::state::always_log(&format!(
             "InputPin::ReceiveConnection pmt_null={}",
             pmt.is_null()
         ));
@@ -574,7 +574,7 @@ impl OutputPin {
 
 impl IPin_Impl for OutputPin_Impl {
     fn Connect(&self, preceivepin: Ref<'_, IPin>, pmt: *const AM_MEDIA_TYPE) -> Result<()> {
-        debug_log(&format!(
+        crate::state::always_log(&format!(
             "OutputPin::Connect enter pmt_null={}",
             pmt.is_null()
         ));

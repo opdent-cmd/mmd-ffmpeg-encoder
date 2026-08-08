@@ -57,6 +57,7 @@ impl windows::Win32::System::Com::IPersist_Impl for Filter_Impl {
 
 impl IMediaFilter_Impl for Filter_Impl {
     fn Stop(&self) -> Result<()> {
+        crate::state::always_log("Filter::Stop enter");
         if let Some(mut e) = self.shared.encoder.lock().unwrap().take() {
             e.stop();
         }
@@ -118,6 +119,8 @@ impl IMediaFilter_Impl for Filter_Impl {
         // A clean stop means the render finished (or was cancelled by the
         // user); keep the crash watcher quiet.
         crate::state::clear_crash_marker();
+        // Close the live log console after a clean render.
+        crate::state::stop_log_viewer();
         {
             let out = self.shared.output.lock().unwrap();
             if let Some(a) = out.allocator.as_ref() {
@@ -148,6 +151,19 @@ impl IMediaFilter_Impl for Filter_Impl {
         let mut cfg = crate::config::load();
         crate::state::set_debug(cfg.debug);
         cfg.ffmpeg_path = crate::config::resolve_ffmpeg_path(&cfg);
+        crate::state::always_log(&format!(
+            "config: codec={} preset={} rate_mode={} bitrate={} crf={} container={} alpha={} delete_avi={} merge_audio={} ffmpeg={}",
+            cfg.codec,
+            cfg.preset,
+            cfg.rate_mode,
+            cfg.bitrate,
+            cfg.crf,
+            if cfg.container.is_empty() { "avi" } else { &cfg.container },
+            if cfg.alpha_format.is_empty() { "off" } else { &cfg.alpha_format },
+            cfg.delete_avi,
+            cfg.merge_audio,
+            cfg.ffmpeg_path
+        ));
         // Mark the filter as running BEFORE any slow auto-detection or
         // encoder probing. Frames may arrive while Run() is still setting
         // things up; they are queued and delivered once ffmpeg is ready.

@@ -58,7 +58,7 @@ impl IClassFactory_Impl for ClassFactory_Impl {
         riid: *const GUID,
         ppvobject: *mut *mut c_void,
     ) -> Result<()> {
-        state::debug_log(&format!(
+        state::always_log(&format!(
             "CreateInstance: outer_null={} riid={:08X?}",
             punkouter.is_null(),
             unsafe { riid.as_ref().map(|g| g.data1) }
@@ -73,6 +73,9 @@ impl IClassFactory_Impl for ClassFactory_Impl {
             // The output pin negotiates its media type before Run(), so the
             // codec/fourcc must be known from the start.
             let cfg = config::load();
+            // Start the real-time log viewer as early as possible when
+            // debug mode is enabled.
+            state::set_debug(cfg.debug);
             let (fourcc, mux) = encoder::pick_fourcc_mux(&cfg.codec, &cfg.alpha_format);
             let mut core = shared.core.lock().unwrap();
             core.fourcc = fourcc;
@@ -123,7 +126,7 @@ pub unsafe extern "system" fn DllGetClassObject(
     let Some(rclsid) = (unsafe { rclsid.as_ref() }) else {
         return HRESULT(0x80004003u32 as i32); // E_POINTER
     };
-    state::debug_log(&format!(
+    state::always_log(&format!(
         "DllGetClassObject: rclsid={:08X}-{:04X}-{:04X} expected={:08X}",
         rclsid.data1, rclsid.data2, rclsid.data3, CLSID_FFMPEG_ENCODER.data1
     ));
