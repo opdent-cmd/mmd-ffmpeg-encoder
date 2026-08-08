@@ -305,7 +305,7 @@ impl IPin_Impl for InputPin_Impl {
     }
 
     fn Disconnect(&self) -> Result<()> {
-        debug_log("InputPin::Disconnect");
+        crate::state::always_log("InputPin::Disconnect");
         let mut conn = self.shared.input.lock().unwrap();
         if conn.peer.is_none() {
             return Err(err(S_FALSE_HR));
@@ -315,6 +315,7 @@ impl IPin_Impl for InputPin_Impl {
     }
 
     fn ConnectedTo(&self) -> Result<IPin> {
+        crate::state::always_log("InputPin::ConnectedTo");
         self.shared
             .input
             .lock()
@@ -325,8 +326,12 @@ impl IPin_Impl for InputPin_Impl {
     }
 
     fn ConnectionMediaType(&self, pmt: *mut AM_MEDIA_TYPE) -> Result<()> {
+        crate::state::always_log("InputPin::ConnectionMediaType");
         let conn = self.shared.input.lock().unwrap();
         let mt = conn.mt.as_ref().ok_or(err(VFW_E_NOT_CONNECTED))?;
+        if pmt.is_null() {
+            return Err(err(E_POINTER));
+        }
         unsafe {
             *pmt = mediatype::clone_mt(mt);
         }
@@ -334,6 +339,10 @@ impl IPin_Impl for InputPin_Impl {
     }
 
     fn QueryPinInfo(&self, pinfo: *mut PIN_INFO) -> Result<()> {
+        crate::state::always_log("InputPin::QueryPinInfo");
+        if pinfo.is_null() {
+            return Err(err(E_POINTER));
+        }
         let mut info = PIN_INFO::default();
         info.dir = PINDIR_INPUT;
         fill_ach_name(&mut info.achName, "FFmpegIn");
@@ -345,14 +354,17 @@ impl IPin_Impl for InputPin_Impl {
     }
 
     fn QueryDirection(&self) -> Result<PIN_DIRECTION> {
+        crate::state::always_log("InputPin::QueryDirection");
         Ok(PINDIR_INPUT)
     }
 
     fn QueryId(&self) -> Result<PWSTR> {
+        crate::state::always_log("InputPin::QueryId");
         query_id("FFmpegIn")
     }
 
     fn QueryAccept(&self, pmt: *const AM_MEDIA_TYPE) -> HRESULT {
+        crate::state::always_log("InputPin::QueryAccept");
         let Some(mt) = (unsafe { pmt.as_ref() }) else {
             return E_POINTER;
         };
@@ -366,10 +378,12 @@ impl IPin_Impl for InputPin_Impl {
     }
 
     fn EnumMediaTypes(&self) -> Result<IEnumMediaTypes> {
+        crate::state::always_log("InputPin::EnumMediaTypes");
         Ok(EnumMediaTypes::new(Vec::new()).into())
     }
 
     fn QueryInternalConnections(&self, appin: OutRef<'_, IPin>, npin: *mut u32) -> Result<()> {
+        crate::state::always_log("InputPin::QueryInternalConnections");
         // A normal transform filter has no hidden internal connections;
         // returning E_NOTIMPL (like the DirectShow base classes) keeps the
         // graph builder from trying to "complete" a path through us and
@@ -464,16 +478,18 @@ impl IPin_Impl for InputPin_Impl {
 
 impl IMemInputPin_Impl for InputPin_Impl {
     fn GetAllocator(&self) -> Result<IMemAllocator> {
+        crate::state::always_log("InputPin::GetAllocator");
         Err(err(E_NOTIMPL_HR))
     }
 
     fn NotifyAllocator(&self, pallocator: Ref<'_, IMemAllocator>, _breadonly: BOOL) -> Result<()> {
-        debug_log("InputPin::NotifyAllocator");
+        crate::state::always_log("InputPin::NotifyAllocator");
         self.shared.input.lock().unwrap().allocator = pallocator.cloned();
         Ok(())
     }
 
     fn GetAllocatorRequirements(&self) -> Result<ALLOCATOR_PROPERTIES> {
+        crate::state::always_log("InputPin::GetAllocatorRequirements");
         Err(err(E_NOTIMPL_HR))
     }
 
@@ -571,6 +587,10 @@ impl IMemInputPin_Impl for InputPin_Impl {
     }
 
     fn ReceiveMultiple(&self, psamples: *const Option<IMediaSample>, nsamples: i32) -> Result<i32> {
+        crate::state::always_log("InputPin::ReceiveMultiple");
+        if psamples.is_null() || nsamples <= 0 {
+            return Ok(0);
+        }
         let mut processed = 0;
         for i in 0..nsamples {
             let s = unsafe { &*psamples.add(i as usize) };
@@ -585,6 +605,7 @@ impl IMemInputPin_Impl for InputPin_Impl {
     }
 
     fn ReceiveCanBlock(&self) -> Result<()> {
+        crate::state::always_log("InputPin::ReceiveCanBlock");
         Ok(())
     }
 }
@@ -747,6 +768,7 @@ impl IPin_Impl for OutputPin_Impl {
     }
 
     fn ConnectedTo(&self) -> Result<IPin> {
+        crate::state::always_log("OutputPin::ConnectedTo");
         self.shared
             .output
             .lock()
@@ -757,8 +779,12 @@ impl IPin_Impl for OutputPin_Impl {
     }
 
     fn ConnectionMediaType(&self, pmt: *mut AM_MEDIA_TYPE) -> Result<()> {
+        crate::state::always_log("OutputPin::ConnectionMediaType");
         let conn = self.shared.output.lock().unwrap();
         let mt = conn.mt.as_ref().ok_or(err(VFW_E_NOT_CONNECTED))?;
+        if pmt.is_null() {
+            return Err(err(E_POINTER));
+        }
         unsafe {
             *pmt = mediatype::clone_mt(mt);
         }
@@ -766,6 +792,10 @@ impl IPin_Impl for OutputPin_Impl {
     }
 
     fn QueryPinInfo(&self, pinfo: *mut PIN_INFO) -> Result<()> {
+        crate::state::always_log("OutputPin::QueryPinInfo");
+        if pinfo.is_null() {
+            return Err(err(E_POINTER));
+        }
         let mut info = PIN_INFO::default();
         info.dir = PINDIR_OUTPUT;
         fill_ach_name(&mut info.achName, "FFmpegOut");
@@ -777,14 +807,17 @@ impl IPin_Impl for OutputPin_Impl {
     }
 
     fn QueryDirection(&self) -> Result<PIN_DIRECTION> {
+        crate::state::always_log("OutputPin::QueryDirection");
         Ok(PINDIR_OUTPUT)
     }
 
     fn QueryId(&self) -> Result<PWSTR> {
+        crate::state::always_log("OutputPin::QueryId");
         query_id("FFmpegOut")
     }
 
     fn QueryAccept(&self, pmt: *const AM_MEDIA_TYPE) -> HRESULT {
+        crate::state::always_log("OutputPin::QueryAccept");
         let Some(mt) = (unsafe { pmt.as_ref() }) else {
             return E_POINTER;
         };
@@ -798,6 +831,7 @@ impl IPin_Impl for OutputPin_Impl {
     }
 
     fn EnumMediaTypes(&self) -> Result<IEnumMediaTypes> {
+        crate::state::always_log("OutputPin::EnumMediaTypes");
         let core = self.shared.core.lock().unwrap();
         match core.fmt.as_ref() {
             Some(fmt) => {
@@ -809,6 +843,7 @@ impl IPin_Impl for OutputPin_Impl {
     }
 
     fn QueryInternalConnections(&self, appin: OutRef<'_, IPin>, npin: *mut u32) -> Result<()> {
+        crate::state::always_log("OutputPin::QueryInternalConnections");
         let _ = (appin, npin);
         Err(err(E_NOTIMPL_HR))
     }

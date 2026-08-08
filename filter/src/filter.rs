@@ -383,6 +383,9 @@ impl IBaseFilter_Impl for Filter_Impl {
 
     fn FindPin(&self, id: &PCWSTR) -> Result<IPin> {
         crate::state::always_log("IBaseFilter::FindPin");
+        if id.is_null() {
+            return Err(crate::state::err(crate::state::E_POINTER));
+        }
         let mut s = String::new();
         let mut i = 0usize;
         unsafe {
@@ -412,6 +415,9 @@ impl IBaseFilter_Impl for Filter_Impl {
 
     fn QueryFilterInfo(&self, pinfo: *mut FILTER_INFO) -> Result<()> {
         crate::state::always_log("IBaseFilter::QueryFilterInfo");
+        if pinfo.is_null() {
+            return Err(crate::state::err(crate::state::E_POINTER));
+        }
         let mut info = FILTER_INFO::default();
         fill_ach_name(&mut info.achName, FILTER_NAME);
         info.pGraph = core::mem::ManuallyDrop::new(self.graph.lock().unwrap().clone());
