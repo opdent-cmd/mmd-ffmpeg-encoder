@@ -36,6 +36,11 @@ pub struct Config {
     pub delete_avi: bool,
     // Copy the audio track from the MMD .avi into the extra container file.
     pub merge_audio: bool,
+    // Write the encoded video into the temporary MMD .avi as well. When
+    // false (recommended), the .avi only carries MMD's audio track; the
+    // video is written directly to the final MP4/MKV, so the temporary
+    // file stays tiny before it is deleted.
+    pub write_avi_video: bool,
 }
 
 fn ini_candidates() -> Vec<PathBuf> {
@@ -109,6 +114,7 @@ pub fn load() -> Config {
         alpha_format: String::new(),
         delete_avi: true,
         merge_audio: true,
+        write_avi_video: false,
     };
 
     let mut path = None;
@@ -168,6 +174,9 @@ pub fn load() -> Config {
             }
             "video" if key == "merge_audio" => {
                 cfg.merge_audio = value == "1" || value.eq_ignore_ascii_case("true")
+            }
+            "video" if key == "write_avi_video" => {
+                cfg.write_avi_video = value == "1" || value.eq_ignore_ascii_case("true")
             }
             _ => {}
         }

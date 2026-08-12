@@ -935,6 +935,7 @@ mod tests {
             alpha_format: String::new(),
             delete_avi: true,
             merge_audio: true,
+            write_avi_video: false,
         }
     }
 

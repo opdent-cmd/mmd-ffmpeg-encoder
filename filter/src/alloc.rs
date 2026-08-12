@@ -130,6 +130,9 @@ impl IMediaSample_Impl for MediaSample_Impl {
     }
 
     fn GetTime(&self, ptimestart: *mut i64, ptimeend: *mut i64) -> Result<()> {
+        if ptimestart.is_null() || ptimeend.is_null() {
+            return Err(err(E_POINTER));
+        }
         let s = *self.start.lock().unwrap();
         let e = *self.stop.lock().unwrap();
         match (s, e) {
@@ -190,6 +193,10 @@ impl IMediaSample_Impl for MediaSample_Impl {
     }
 
     fn SetActualDataLength(&self, len: i32) -> Result<()> {
+        let size = (self.data.len() - self.prefix) as i32;
+        if len < 0 || len > size {
+            return Err(err(crate::state::E_INVALIDARG));
+        }
         *self.actual.lock().unwrap() = len;
         Ok(())
     }

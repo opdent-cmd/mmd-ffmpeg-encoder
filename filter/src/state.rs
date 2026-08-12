@@ -135,12 +135,18 @@ pub fn err(hr: HRESULT) -> windows::core::Error {
     Error::from_hresult(hr)
 }
 
-fn log_dir() -> std::path::PathBuf {
+pub fn log_dir() -> std::path::PathBuf {
     std::env::temp_dir().join("MMDFfmpegEncoder")
 }
 
 pub fn log_path() -> std::path::PathBuf {
     log_dir().join("ffmpeg_encoder.log")
+}
+
+/// Minidump written by the crash handler when MMD dies with an unhandled
+/// exception while our filter is loaded.
+pub fn crash_dump_path() -> std::path::PathBuf {
+    log_dir().join(format!("crash_{}.dmp", std::process::id()))
 }
 
 fn marker_path() -> std::path::PathBuf {
@@ -160,7 +166,8 @@ pub fn always_log(msg: &str) {
         .append(true)
         .open(log_dir().join("ffmpeg_encoder.log"))
     {
-        let _ = writeln!(f, "{}", msg);
+        let tid = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+        let _ = writeln!(f, "[pid={} tid={}] {}", std::process::id(), tid, msg);
     }
 }
 
@@ -298,6 +305,7 @@ pub fn set_debug(enabled: bool) {
 pub const E_POINTER: HRESULT = HRESULT(0x80004003u32 as i32);
 pub const E_FAIL: HRESULT = HRESULT(0x80004005u32 as i32);
 pub const E_OUTOFMEMORY: HRESULT = HRESULT(0x8007000Eu32 as i32);
+pub const E_INVALIDARG: HRESULT = HRESULT(0x80070057u32 as i32);
 pub const E_NOINTERFACE: HRESULT = HRESULT(0x80004002u32 as i32);
 pub const E_NOTIMPL_HR: HRESULT = HRESULT(0x80004001u32 as i32);
 pub const E_UNEXPECTED_HR: HRESULT = HRESULT(0x8000FFFFu32 as i32);

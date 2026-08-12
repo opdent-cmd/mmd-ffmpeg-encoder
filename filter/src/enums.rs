@@ -8,7 +8,7 @@ use windows::Win32::Media::MediaFoundation::AM_MEDIA_TYPE;
 use windows::Win32::System::Com::CoTaskMemFree;
 
 use crate::mediatype::{alloc_mt_ptr, free_mt};
-use crate::state::{err, E_OUTOFMEMORY, S_FALSE_HR};
+use crate::state::{err, E_OUTOFMEMORY, E_POINTER, S_FALSE_HR};
 
 #[implement(IEnumPins)]
 pub struct EnumPins {
@@ -27,6 +27,9 @@ impl EnumPins {
 
 impl IEnumPins_Impl for EnumPins_Impl {
     fn Next(&self, cpins: u32, pppins: *mut Option<IPin>, pcfetched: *mut u32) -> HRESULT {
+        if cpins > 0 && pppins.is_null() {
+            return E_POINTER;
+        }
         let mut pos = self.pos.lock().unwrap();
         let list = self.list.lock().unwrap();
         let mut fetched = 0u32;
@@ -106,6 +109,9 @@ impl IEnumMediaTypes_Impl for EnumMediaTypes_Impl {
         ppmediatypes: *mut *mut AM_MEDIA_TYPE,
         pcfetched: *mut u32,
     ) -> HRESULT {
+        if cmediatypes > 0 && ppmediatypes.is_null() {
+            return E_POINTER;
+        }
         let mut pos = self.pos.lock().unwrap();
         let list = self.list.lock().unwrap();
         let mut fetched = 0u32;

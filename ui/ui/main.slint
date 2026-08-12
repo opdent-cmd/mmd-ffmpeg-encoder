@@ -4,6 +4,10 @@ export component MainWindow inherits Window {
     title: "MMD FFmpeg 编码器配置";
     width: 520px;
     height: 520px;
+    // Windows system fonts without CJK coverage (e.g. the default Slint
+    // sans-serif) render Chinese text as boxes (口口口). Microsoft YaHei
+    // ships with Windows 10/11 and covers both Latin and CJK glyphs.
+    default-font-family: "Microsoft YaHei UI";
 
     // Force a light color scheme. Without this, Slint follows the Windows
     // dark mode and renders white control text on the light window

@@ -96,6 +96,19 @@ fn deliver_packet(shared: &Shared, data: Vec<u8>) -> Result<()> {
             return Err(err(E_POINTER));
         }
     };
+    // The negotiated cb_buffer is only a request; the allocator may have
+    // returned a smaller actual buffer (the AVI Mux can renegotiate after
+    // NotifyAllocator). Copying past GetSize() corrupts the heap and shows
+    // up later as a NULL deref inside quartz, so always verify the sample.
+    let sample_size = unsafe { sample.GetSize() };
+    if sample_size < 0 || data.len() > sample_size as usize {
+        crate::state::always_log(&format!(
+            "deliver_packet dropped {} bytes (actual sample buffer is {})",
+            data.len(),
+            sample_size
+        ));
+        return Ok(());
+    }
     let ptr = unsafe { sample.GetPointer()? };
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
@@ -291,13 +304,18 @@ impl IPin_Impl for InputPin_Impl {
             chosen.bFixedSizeSamples.0,
             chosen.lSampleSize
         ));
-        if !chosen.pbFormat.is_null() && chosen.cbFormat >= 48 {
+        if !chosen.pbFormat.is_null() && chosen.cbFormat > 0 {
             let p = chosen.pbFormat as *const u8;
             let mut hex = String::new();
-            for k in 0..64 {
+            let n = (chosen.cbFormat as usize).min(64);
+            for k in 0..n {
                 hex.push_str(&format!("{:02X} ", unsafe { *p.add(k) }));
             }
-            debug_log(&format!("InputPin::ReceiveConnection fmt[0..63]={}", hex));
+            debug_log(&format!(
+                "InputPin::ReceiveConnection fmt[0..{}]={}",
+                n.saturating_sub(1),
+                hex
+            ));
         }
         conn.peer = pconnector.cloned();
         conn.mt = Some(chosen);
@@ -534,23 +552,30 @@ impl IMemInputPin_Impl for InputPin_Impl {
         }
         drop(core);
 
-        let bytes_per_pixel = (bpp / 8) as usize;
-        let tight = width as usize * height as usize * bytes_per_pixel;
+        let bytes_per_pixel = (bpp / 8).max(1) as usize;
+        let row = width as usize * bytes_per_pixel;
+        let tight = row * height as usize;
+        let stride = (row + 3) & !3;
         let mut depad: Vec<u8> = Vec::new();
-        let frame: &[u8] = if bpp == 24 && data.len() > tight {
-            let stride = ((width as usize * 3) + 3) & !3;
-            if data.len() >= stride * height as usize {
-                depad.reserve(tight);
-                for y in 0..height as usize {
-                    let row = &data[y * stride..y * stride + width as usize * 3];
-                    depad.extend_from_slice(row);
-                }
-                &depad[..]
-            } else {
-                data
-            }
-        } else {
+        let frame: &[u8] = if data.len() == tight {
             data
+        } else if data.len() >= stride * height as usize && stride != row {
+            // DIB rows are padded to 4 bytes; ffmpeg expects tight rows.
+            depad.reserve(tight);
+            for y in 0..height as usize {
+                depad.extend_from_slice(&data[y * stride..y * stride + row]);
+            }
+            &depad[..]
+        } else if data.len() < tight {
+            // Short sample: pad with zeros so the ffmpeg frame boundary
+            // stays intact instead of desynchronizing the whole stream.
+            depad.resize(tight, 0);
+            depad[..data.len()].copy_from_slice(data);
+            &depad[..]
+        } else {
+            // Extra trailing bytes: keep only one exact frame.
+            depad.extend_from_slice(&data[..tight]);
+            &depad[..]
         };
 
         {
@@ -647,9 +672,11 @@ impl IPin_Impl for OutputPin_Impl {
                 ));
             }
         }
-        let mut conn = self.shared.output.lock().unwrap();
-        if conn.peer.is_some() {
-            return Err(err(VFW_E_ALREADY_CONNECTED));
+        {
+            let conn = self.shared.output.lock().unwrap();
+            if conn.peer.is_some() {
+                return Err(err(VFW_E_ALREADY_CONNECTED));
+            }
         }
 
         let built = {
@@ -676,8 +703,11 @@ impl IPin_Impl for OutputPin_Impl {
             .unwrap()
             .clone()
             .ok_or(err(E_FAIL))?;
-        // Note: AVI Mux returns S_FALSE from QueryAccept for every video type,
-        // so the real acceptance check is ReceiveConnection.
+        // Note: AVI Mux returns S_FALSE from QueryAccept for every video
+        // type, so the real acceptance check is ReceiveConnection. Do NOT
+        // hold our output-pin mutex here: the downstream pin may call back
+        // into ConnectedTo/QueryPinInfo while negotiating, and a non-reentrant
+        // mutex would deadlock the graph thread.
         let rc = unsafe { peer.ReceiveConnection(&self_pin, &mt) };
         debug_log(&format!("OutputPin::Connect ReceiveConnection hr={:08X}", hr_of(&rc)));
         rc?;
@@ -713,30 +743,34 @@ impl IPin_Impl for OutputPin_Impl {
             cbAlign: 1,
             cbPrefix: 0,
         };
-        conn.cb_buffer = req.cbBuffer;
 
         let mut own_alloc = false;
-        let allocator = match unsafe { meminput.GetAllocator() } {
+        let (allocator, actual_cb) = match unsafe { meminput.GetAllocator() } {
             Ok(a) => {
                 debug_log("OutputPin::Connect allocator: downstream");
-                unsafe { a.SetProperties(&req) }?;
+                let actual = unsafe { a.SetProperties(&req) }?;
                 let na = unsafe { meminput.NotifyAllocator(&a, false) };
                 debug_log(&format!(
-                    "OutputPin::Connect NotifyAllocator(downstream) hr={:08X}",
-                    hr_of(&na)
+                    "OutputPin::Connect NotifyAllocator(downstream) hr={:08X} actual_cb={}",
+                    hr_of(&na),
+                    actual.cbBuffer
                 ));
                 na?;
-                a
+                (a, actual.cbBuffer)
             }
             Err(e) if e.code() == E_NOTIMPL_HR => {
                 debug_log("OutputPin::Connect allocator: own");
                 let a: IMemAllocator = MemAllocator::new().into();
-                unsafe { a.SetProperties(&req) }?;
+                let actual = unsafe { a.SetProperties(&req) }?;
                 let na = unsafe { meminput.NotifyAllocator(&a, false) };
-                debug_log(&format!("OutputPin::Connect NotifyAllocator hr={:08X}", hr_of(&na)));
+                debug_log(&format!(
+                    "OutputPin::Connect NotifyAllocator hr={:08X} actual_cb={}",
+                    hr_of(&na),
+                    actual.cbBuffer
+                ));
                 na?;
                 own_alloc = true;
-                a
+                (a, actual.cbBuffer)
             }
             Err(e) => {
                 debug_log(&format!("OutputPin::Connect GetAllocator failed {:08X}", e.code().0));
@@ -746,11 +780,17 @@ impl IPin_Impl for OutputPin_Impl {
         };
         debug_log("OutputPin::Connect OK");
 
+        let mut conn = self.shared.output.lock().unwrap();
+        if conn.peer.is_some() {
+            unsafe { mediatype::free_mt(&mut mt) };
+            return Err(err(VFW_E_ALREADY_CONNECTED));
+        }
         conn.peer = Some(peer);
         conn.meminput = Some(meminput);
         conn.allocator = Some(allocator);
         conn.own_alloc = own_alloc;
         conn.mt = Some(mt);
+        conn.cb_buffer = actual_cb;
         Ok(())
     }
 

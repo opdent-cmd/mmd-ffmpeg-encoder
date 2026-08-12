@@ -30,7 +30,16 @@ pub fn check_input(mt: &AM_MEDIA_TYPE) -> bool {
     {
         return false;
     }
-    mt.formattype == FORMAT_VideoInfo || mt.formattype == FORMAT_VideoInfo2
+    if mt.pbFormat.is_null() {
+        return false;
+    }
+    if mt.formattype == FORMAT_VideoInfo {
+        mt.cbFormat >= std::mem::size_of::<VIDEOINFOHEADER>() as u32
+    } else if mt.formattype == FORMAT_VideoInfo2 {
+        mt.cbFormat >= std::mem::size_of::<VIDEOINFOHEADER2>() as u32
+    } else {
+        false
+    }
 }
 
 pub fn parse_input(mt: &AM_MEDIA_TYPE) -> Option<FormatInfo> {
@@ -41,9 +50,14 @@ pub fn parse_input(mt: &AM_MEDIA_TYPE) -> Option<FormatInfo> {
         if mt.formattype == FORMAT_VideoInfo {
             let vih = &*(mt.pbFormat as *const VIDEOINFOHEADER);
             let h = vih.bmiHeader.biHeight;
+            let w = vih.bmiHeader.biWidth;
+            let h_abs = h.checked_abs()?;
+            if w <= 0 || h_abs == 0 {
+                return None;
+            }
             (
-                vih.bmiHeader.biWidth,
-                h.abs(),
+                w,
+                h_abs,
                 h > 0,
                 if vih.AvgTimePerFrame > 0 {
                     vih.AvgTimePerFrame
@@ -54,9 +68,14 @@ pub fn parse_input(mt: &AM_MEDIA_TYPE) -> Option<FormatInfo> {
         } else if mt.formattype == FORMAT_VideoInfo2 {
             let vih = &*(mt.pbFormat as *const VIDEOINFOHEADER2);
             let h = vih.bmiHeader.biHeight;
+            let w = vih.bmiHeader.biWidth;
+            let h_abs = h.checked_abs()?;
+            if w <= 0 || h_abs == 0 {
+                return None;
+            }
             (
-                vih.bmiHeader.biWidth,
-                h.abs(),
+                w,
+                h_abs,
                 h > 0,
                 if vih.AvgTimePerFrame > 0 {
                     vih.AvgTimePerFrame
@@ -68,6 +87,10 @@ pub fn parse_input(mt: &AM_MEDIA_TYPE) -> Option<FormatInfo> {
             return None;
         }
     };
+    // Sanity-clamp pathological sizes (a corrupt/unsupported format header
+    // must never drive huge allocations or a write into ffmpeg's pipe).
+    let width = width.min(16384);
+    let height = height.min(16384);
 
     let pix_fmt = match mt.subtype {
         // DirectShow RGB24 samples are stored in DIB order: B,G,R.
@@ -154,7 +177,8 @@ pub fn make_output_type(fmt: &FormatInfo, fourcc: u32) -> AM_MEDIA_TYPE {
         },
     };
 
-    let mut fmt_buf = Vec::with_capacity(std::mem::size_of::<VIDEOINFOHEADER>() + cfg.out_cbextra.max(0) as usize);
+    let extra = cfg.out_cbextra.max(0).min(1024 * 1024) as usize;
+    let mut fmt_buf = Vec::with_capacity(std::mem::size_of::<VIDEOINFOHEADER>() + extra);
     unsafe {
         let src = std::slice::from_raw_parts(
             (&vih as *const VIDEOINFOHEADER) as *const u8,

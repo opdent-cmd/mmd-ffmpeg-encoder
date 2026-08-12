@@ -5,6 +5,7 @@
 
 mod alloc;
 mod config;
+mod crash;
 mod encoder;
 mod enums;
 mod filter;
@@ -161,6 +162,7 @@ pub unsafe extern "system" fn DllGetClassObject(
     ppv: *mut *mut c_void,
 ) -> HRESULT {
     ensure_panic_hook();
+    crash::install();
     let Some(rclsid) = (unsafe { rclsid.as_ref() }) else {
         return HRESULT(0x80004003u32 as i32); // E_POINTER
     };
@@ -314,4 +316,108 @@ pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
     let p = wide(&clsid_key);
     let _ = RegDeleteTreeW(HKEY_LOCAL_MACHINE, PCWSTR::from_raw(p.as_ptr()));
     register_categories(false)
+}
+
+#[cfg(test)]
+mod smoke_tests {
+    use super::*;
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+
+    /// Reproduce the exact interrogation sequence seen in the Win10 crash
+    /// log (CreateInstance -> EnumPins -> QueryDirection/QueryPinInfo/
+    /// ConnectedTo/QueryInternalConnections -> QueryFilterInfo) without
+    /// touching the registry.
+    #[test]
+    fn com_factory_and_pin_interrogation_smoke() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+
+        let mut factory_raw: *mut c_void = std::ptr::null_mut();
+        let hr =
+            unsafe { DllGetClassObject(&CLSID_FFMPEG_ENCODER, &IClassFactory::IID, &mut factory_raw) };
+        assert_eq!(hr.0, 0, "DllGetClassObject failed");
+        let factory: IClassFactory = unsafe { IClassFactory::from_raw(factory_raw as *mut _) };
+
+        let obj: IUnknown =
+            unsafe { factory.CreateInstance(None) }.expect("CreateInstance failed");
+        let base: IBaseFilter = obj.cast().expect("QI IBaseFilter failed");
+
+        // The graph builder sequence from the reporter's log.
+        let pins = unsafe { base.EnumPins() }.expect("EnumPins failed");
+        let mut pin_count = 0;
+        loop {
+            let mut arr = [None; 1];
+            let hr = unsafe { pins.Next(&mut arr, None) };
+            if hr.0 != 0 {
+                break;
+            }
+            let pin = arr[0].take().expect("Next returned empty pin slot");
+            pin_count += 1;
+
+            let mut info = PIN_INFO::default();
+            assert!(unsafe { pin.QueryPinInfo(&mut info) }.is_ok());
+            let _ = unsafe { pin.QueryDirection() }.expect("QueryDirection failed");
+            let _ = unsafe { pin.ConnectedTo() };
+            let mut n = 0u32;
+            let _ = unsafe { pin.QueryInternalConnections(None, &mut n) };
+            if let Some(f) = core::mem::ManuallyDrop::into_inner(info.pFilter) {
+                drop(f);
+            }
+            drop(pin);
+        }
+        assert!(pin_count >= 2, "expected input+output pins, got {}", pin_count);
+
+        let mut fi = FILTER_INFO::default();
+        assert!(unsafe { base.QueryFilterInfo(&mut fi) }.is_ok());
+        if let Some(g) = core::mem::ManuallyDrop::into_inner(fi.pGraph) {
+            drop(g);
+        }
+        unsafe { base.EnumPins() }.expect("second EnumPins failed");
+        drop(base);
+        drop(factory);
+    }
+
+    /// MMD's encoder list creates and releases our filter many times in a
+    /// row (the reporter's log shows ~8 cycles before the crash). Repeated
+    /// COM teardown is a classic way to expose a refcount/lifetime bug that
+    /// corrupts the heap and only crashes on a later iteration.
+    #[test]
+    fn com_create_release_stress() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        for round in 0..3000 {
+            let mut factory_raw: *mut c_void = std::ptr::null_mut();
+            let hr = unsafe {
+                DllGetClassObject(&CLSID_FFMPEG_ENCODER, &IClassFactory::IID, &mut factory_raw)
+            };
+            assert_eq!(hr.0, 0);
+            let factory: IClassFactory = unsafe { IClassFactory::from_raw(factory_raw as *mut _) };
+
+            let obj: IUnknown = unsafe { factory.CreateInstance(None) }.expect("CreateInstance");
+            let base: IBaseFilter = obj.cast().expect("QI IBaseFilter");
+
+            let pins = unsafe { base.EnumPins() }.expect("EnumPins");
+            let mut arr = [None; 1];
+            let mut count = 0u32;
+            while unsafe { pins.Next(&mut arr, Some(&mut count)) }.0 == 0 && count > 0 {
+                let pin = arr[0].take().unwrap();
+                let mut info = PIN_INFO::default();
+                if unsafe { pin.QueryPinInfo(&mut info) }.is_ok() {
+                    if let Some(f) = core::mem::ManuallyDrop::into_inner(info.pFilter) {
+                        drop(f);
+                    }
+                }
+                drop(pin);
+            }
+            drop(pins);
+            drop(base);
+            drop(factory);
+
+            if round % 500 == 0 {
+                crate::state::always_log(&format!("stress round {}", round));
+            }
+        }
+    }
 }
