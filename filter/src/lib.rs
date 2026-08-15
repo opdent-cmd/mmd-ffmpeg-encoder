@@ -321,6 +321,7 @@ pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
 #[cfg(test)]
 mod smoke_tests {
     use super::*;
+    use crate::pins::OutputPin;
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
     /// Reproduce the exact interrogation sequence seen in the Win10 crash
@@ -376,6 +377,23 @@ mod smoke_tests {
         unsafe { base.EnumPins() }.expect("second EnumPins failed");
         drop(base);
         drop(factory);
+    }
+
+    /// The generated `windows` COM thunk leaves interface out parameters
+    /// untouched when an implementation returns `Err`. MMD on Win10 probes
+    /// a disconnected output pin with a dirty slot and Quartz then follows
+    /// the stale value. Exercise the raw ABI so the slot must be zeroed.
+    #[test]
+    fn disconnected_pin_connected_to_writes_null_peer() {
+        let pin: IPin = OutputPin::new(Shared::new()).into();
+        let mut peer = 1usize as *mut c_void;
+
+        let hr = unsafe {
+            (Interface::vtable(&pin).ConnectedTo)(Interface::as_raw(&pin), &mut peer)
+        };
+
+        assert_eq!(hr.0, 0, "disconnected ConnectedTo must succeed with null");
+        assert!(peer.is_null(), "ConnectedTo left a stale output pointer");
     }
 
     /// MMD's encoder list creates and releases our filter many times in a

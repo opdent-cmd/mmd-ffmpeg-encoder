@@ -43,6 +43,19 @@ fn hr_of(r: &Result<()>) -> i32 {
     }
 }
 
+/// Return a null peer for an unconnected pin.
+///
+/// The `windows` crate's generated `IPin::ConnectedTo` thunk writes its
+/// `IPin**` output only when this method returns `Ok`.  MMD's Win10 codec
+/// enumeration path probes an unconnected output pin with a non-zero output
+/// slot, then Quartz consumes that slot even after `VFW_E_NOT_CONNECTED`.
+/// Returning a successful null interface makes the COM out parameter
+/// deterministic while preserving the normal DirectShow representation of
+/// "no peer" for callers that perform this probe.
+fn no_connected_pin() -> Result<IPin> {
+    Ok(unsafe { IPin::from_raw(std::ptr::null_mut()) })
+}
+
 // ---------------------------------------------------------------------------
 // Deliver one encoded packet downstream through the output connection.
 // ---------------------------------------------------------------------------
@@ -340,7 +353,7 @@ impl IPin_Impl for InputPin_Impl {
             .unwrap()
             .peer
             .clone()
-            .ok_or(err(VFW_E_NOT_CONNECTED))
+            .map_or_else(no_connected_pin, Ok)
     }
 
     fn ConnectionMediaType(&self, pmt: *mut AM_MEDIA_TYPE) -> Result<()> {
@@ -815,7 +828,7 @@ impl IPin_Impl for OutputPin_Impl {
             .unwrap()
             .peer
             .clone()
-            .ok_or(err(VFW_E_NOT_CONNECTED))
+            .map_or_else(no_connected_pin, Ok)
     }
 
     fn ConnectionMediaType(&self, pmt: *mut AM_MEDIA_TYPE) -> Result<()> {
