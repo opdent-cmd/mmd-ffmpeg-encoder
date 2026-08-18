@@ -4,6 +4,7 @@
 #![allow(linker_messages)]
 
 mod alloc;
+mod com_compat;
 mod config;
 mod crash;
 mod encoder;
@@ -321,7 +322,6 @@ pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
 #[cfg(test)]
 mod smoke_tests {
     use super::*;
-    use crate::pins::OutputPin;
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
     /// Reproduce the exact interrogation sequence seen in the Win10 crash
@@ -379,21 +379,41 @@ mod smoke_tests {
         drop(factory);
     }
 
-    /// The generated `windows` COM thunk leaves interface out parameters
-    /// untouched when an implementation returns `Err`. MMD on Win10 probes
-    /// a disconnected output pin with a dirty slot and Quartz then follows
-    /// the stale value. Exercise the raw ABI so the slot must be zeroed.
+    /// MMD on Win10 probes a disconnected output pin with a dirty slot and
+    /// Quartz later follows it even when ConnectedTo reports not connected.
+    /// Exercise the patched raw ABI: retain the standard error and clear the
+    /// output pointer before returning it.
     #[test]
     fn disconnected_pin_connected_to_writes_null_peer() {
-        let pin: IPin = OutputPin::new(Shared::new()).into();
+        let (_, pin) = crate::filter::make_pins(Shared::new());
         let mut peer = 1usize as *mut c_void;
 
         let hr = unsafe {
             (Interface::vtable(&pin).ConnectedTo)(Interface::as_raw(&pin), &mut peer)
         };
 
-        assert_eq!(hr.0, 0, "disconnected ConnectedTo must succeed with null");
+        assert_eq!(hr, VFW_E_NOT_CONNECTED);
         assert!(peer.is_null(), "ConnectedTo left a stale output pointer");
+
+        let hr = unsafe {
+            (Interface::vtable(&pin).ConnectedTo)(
+                Interface::as_raw(&pin),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(hr, E_POINTER);
+
+        // QueryInterface must keep returning the patched ABI surface.
+        let round_trip: IPin = pin.cast::<IUnknown>().unwrap().cast().unwrap();
+        peer = 1usize as *mut c_void;
+        let hr = unsafe {
+            (Interface::vtable(&round_trip).ConnectedTo)(
+                Interface::as_raw(&round_trip),
+                &mut peer,
+            )
+        };
+        assert_eq!(hr, VFW_E_NOT_CONNECTED);
+        assert!(peer.is_null(), "QI round-trip lost the ConnectedTo shim");
     }
 
     /// MMD's encoder list creates and releases our filter many times in a

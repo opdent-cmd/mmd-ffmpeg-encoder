@@ -98,7 +98,7 @@ fn save_config(cfg: &Config) -> std::io::Result<()> {
         "[ffmpeg]\n\
          ; ffmpeg.exe path (auto-filled on save)\n\
          path={}\n\
-         ; 1 = write debug log to %TEMP%\\ffmpeg_encoder_debug.log\n\
+         ; 1 = write debug log to %TEMP%\\MMDFfmpegEncoder\\ffmpeg_encoder_debug.log\n\
          debug={}\n\
          \n\
          [video]\n\

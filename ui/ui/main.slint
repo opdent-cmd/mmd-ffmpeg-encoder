@@ -65,7 +65,7 @@ export component MainWindow inherits Window {
                 ComboBox {
                     current-index <=> root.vendor-index;
                     enabled: root.alpha-index == 0;
-                    model: ["自动（推荐）", "NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "不使用（CPU）"];
+                    model: ["兼容优先（CPU，推荐）", "NVIDIA (NVENC)", "Intel (QSV)", "AMD (AMF)", "不使用（CPU）"];
                 }
             }
             Row {

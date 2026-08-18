@@ -55,7 +55,10 @@ pub fn install() {
         };
         PREV_FILTER.store(raw, Ordering::SeqCst);
     }
-    crate::state::always_log("crash dump handler installed");
+    crate::state::always_log(&format!(
+        "FFmpegVideoEncoder {}: crash handler installed; ConnectedTo ABI shim enabled",
+        env!("CARGO_PKG_VERSION")
+    ));
 }
 
 unsafe extern "system" fn handler(ep: *const EXCEPTION_POINTERS) -> i32 {

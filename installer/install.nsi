@@ -10,7 +10,7 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !define APP_NAME "MMD FFmpeg 编码器"
-!define APP_VERSION "1.1.8"
+!define APP_VERSION "1.1.9-test.1"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MMDFfmpegEncoder"
 
 !insertmacro MUI_PAGE_WELCOME
@@ -32,7 +32,7 @@ Section "安装" SecMain
   File "..\bin\ffmpeg.exe"
 
   SetOutPath "$INSTDIR"
-  File "..\bin\FFmpegVideoEncoder.dll"
+  File "..\native-filter\build\FFmpegVideoEncoder.dll"
   File /oname=MMDEncoderConfig.exe "..\target\release\mmd_encoder_config.exe"
 
   ; GPL-3.0 license text and third-party notices travel with the installer.

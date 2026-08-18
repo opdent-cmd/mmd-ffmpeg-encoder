@@ -7,17 +7,16 @@ output, automatically produce a **single MP4/MKV with audio**, support
 alpha-channel WebM / MOV / MKV, and clean up the temporary AVI after
 rendering.
 
-The core is a 64-bit DirectShow "video compressor" filter written in
-**Rust**: MMD hands rendered frames to the filter, which feeds them into an
-ffmpeg child process for encoding, writes the encoded stream back to MMD's
-AVI Mux, and has ffmpeg mux the same stream into an MP4/MKV at the same
-time.
+The compatibility implementation is a native x64 C++ DirectShow filter built
+on Microsoft's reference BaseClasses. MMD only loads this small COM/filter
+shell; all codec work stays in a separate `ffmpeg.exe` process. The Rust +
+Slint configuration UI is unchanged.
 
 ## Features
 
-- Hardware encoding: auto-detect (recommended) or pick NVIDIA NVENC /
-  Intel QSV / AMD AMF; falls back to CPU (libx264/libx265) when no GPU
-  encoder is available.
+- Portable CPU encoding is the default. NVIDIA NVENC / Intel QSV / AMD AMF
+  remain explicit options and are preflight-tested, with CPU fallback when
+  the selected encoder or driver cannot start.
 - Formats: H.264 / HEVC / AV1 (unsupported hardware combinations
   automatically fall back to CPU).
 - Bitrate modes: quality-first (CRF) / variable bitrate (VBR), with a
@@ -29,8 +28,7 @@ time.
   use CPU encoding.
 - The audio track in MMD's AVI is merged into the MP4/MKV losslessly (AAC).
 - Re-rendering to the same filename overwrites automatically.
-- On errors, a log is written to the system temp folder and opened in
-  Notepad, making crashes / encode failures easy to report.
+- FFmpeg diagnostics are written to the system temp folder for issue reports.
 - Graphical configuration UI (Rust + Slint).
 - Windows installer (NSIS, ~27 MB, bundles ffmpeg 7.1).
 - Automatic CPU fallback when the GPU encoder is incompatible with the
@@ -44,14 +42,15 @@ time.
 
 ## Crashes & Contributing Fixes
 
-`quartz.dll` is a Windows system component (the DirectShow runtime), and its
-behavior differs between Windows versions. A render graph that works on one
-machine may crash on another, so environment-specific crashes are expected.
+`quartz.dll` is a Windows system component (the DirectShow runtime). Starting
+with the 1.1.9 compatibility implementation, COM lifetime, pins, media types,
+and allocators are handled by Microsoft's native DirectShow BaseClasses rather
+than generated Rust COM thunks. This specifically removes the Win10
+`OutputPin::ConnectedTo` crash path reported against 1.1.7 and 1.1.8.
 When filing an issue, please attach:
 
-- `%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder.log`
-- `crash_*.dmp` in the same folder, if present (written automatically by
-  v1.1.7+ when the process dies with an unhandled exception)
+- `%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder_debug.log`
+- a Windows Error Reporting dump, if one was generated
 - Windows build number (`winver`) and the file version of
   `C:\Windows\System32\quartz.dll`
 
@@ -63,8 +62,11 @@ fastest path to making the encoder stable for everyone.
 ## Project Structure
 
 ```
-├── filter/       DirectShow filter (Rust cdylib)
-│   └── src/      COM filter, input/output pins, ffmpeg child, Annex B splitter
+├── native-filter/ Native C++ DirectShow filter (release implementation)
+│   ├── src/       BaseClasses transform filter + ffmpeg child process
+│   ├── tests/     registration-free COM ABI stress test
+│   └── third_party/ Microsoft DirectShow BaseClasses
+├── filter/       Legacy Rust filter retained as a diagnostic fallback
 ├── ui/           Slint config UI (Rust binary)
 │   ├── src/      ini read/write, encoder mapping
 │   └── ui/       UI definition (main.slint)
@@ -75,21 +77,26 @@ fastest path to making the encoder stable for everyone.
 
 ## Build
 
-Requires Rust (stable), Windows 10/11, and VS Build Tools (C++ linker).
+Requires Rust (stable), Visual Studio 2022 Build Tools with C++, and a Windows
+10/11 SDK.
 
 ```powershell
-# Build the workspace (filter + config UI)
-cargo build --release
+# Native x64 DirectShow DLL + ABI smoke test
+native-filter\build.cmd
+native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
+
+# Rust/Slint config UI
+cargo build --release -p mmd_encoder_config
 
 # Outputs
-# target/release/ffmpeg_encoder.dll        DirectShow filter
+# native-filter/build/FFmpegVideoEncoder.dll  DirectShow filter
 # target/release/mmd_encoder_config.exe    config UI
 ```
 
 Register the filter (requires administrator):
 
 ```powershell
-regsvr32 "target\release\ffmpeg_encoder.dll"
+regsvr32 "native-filter\build\FFmpegVideoEncoder.dll"
 ```
 
 Build the installer (requires NSIS 3.x):
@@ -133,17 +140,17 @@ MMD rendered frames → MMDxShow → SampleGrabber → this filter → AVI Mux �
                                         └─ after render: merge audio + delete .avi
 ```
 
-The filter implements all COM interfaces in Rust (IBaseFilter / IPin /
-IMemInputPin / IMemAllocator / IMediaSample) and handles media types,
-allocator lifetime, sample timestamps, and Annex B packet splitting for AVI
-Mux compatibility; frames arriving before the encoder starts are buffered
-and written once it is ready, so the beginning of the render is never lost.
+Microsoft's native DirectShow BaseClasses implement COM lifetime, `IBaseFilter`,
+pins, media negotiation, and allocators. Project code validates MMD's RGB media
+types, streams frames to the out-of-process ffmpeg encoder, and splits Annex B
+packets for AVI Mux. No FFmpeg codec DLL is loaded into MMD.
 
 ## License
 
 This project is released under **GPL-3.0** (see [LICENSE](LICENSE)).
 
-- The filter and config UI are original code of this project.
+- The filter and config UI are original project code; the native filter uses
+  Microsoft's MIT-licensed Windows Classic Samples DirectShow BaseClasses.
 - Dependencies: `windows` / `windows-core` (MIT/Apache-2.0), `slint`
   (GPL-3.0 or commercial), ffmpeg (GPL build).
 - Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)

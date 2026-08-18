@@ -25,7 +25,7 @@
 
 | 组件 | 许可证 | 说明 |
 |---|---|---|
-| Microsoft Windows-classic-samples（DirectShow baseclasses） | MIT | `tools/` 下 C++ 测试工具仅测试用，不进入安装包 |
+| Microsoft Windows-classic-samples（DirectShow BaseClasses） | MIT | 源码位于 `native-filter/third_party/baseclasses`，静态链接进发布滤镜；许可文本见 `native-filter/third_party/WINDOWS_CLASSIC_SAMPLES_LICENSE` |
 
 ## GPL 合规说明
 

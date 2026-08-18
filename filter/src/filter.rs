@@ -38,6 +38,8 @@ impl Filter {
 pub fn make_pins(shared: Arc<Shared>) -> (IPin, IPin) {
     let input: IPin = InputPin::new(shared.clone()).into();
     let output: IPin = OutputPin::new(shared.clone()).into();
+    crate::com_compat::patch_input_pin(&input);
+    crate::com_compat::patch_output_pin(&output);
     (input, output)
 }
 

@@ -1,5 +1,9 @@
 # Rust build output
 /target/
+/native-filter/build/
+*.obj
+*.lib
+*.exp
 
 # Installer / build artifacts
 /dist/
