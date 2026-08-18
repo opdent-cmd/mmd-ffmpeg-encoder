@@ -1,8 +1,8 @@
 #include <windows.h>
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,1,9,1
- PRODUCTVERSION 1,1,9,1
+ FILEVERSION 1,1,9,0
+ PRODUCTVERSION 1,1,9,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS VS_FF_DEBUG
@@ -19,11 +19,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "MMD FFmpeg Encoder Project\0"
             VALUE "FileDescription", "Native DirectShow FFmpeg Video Encoder\0"
-            VALUE "FileVersion", "1.1.9-test.1\0"
+            VALUE "FileVersion", "1.1.9\0"
             VALUE "InternalName", "FFmpegVideoEncoder.dll\0"
             VALUE "OriginalFilename", "FFmpegVideoEncoder.dll\0"
             VALUE "ProductName", "MMD FFmpeg Encoder\0"
-            VALUE "ProductVersion", "1.1.9-test.1\0"
+            VALUE "ProductVersion", "1.1.9\0"
         END
     END
     BLOCK "VarFileInfo"

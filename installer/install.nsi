@@ -2,7 +2,10 @@
 !include "MUI2.nsh"
 
 Name "MMD FFmpeg 编码器"
-OutFile "..\..\dist\MMDFfmpegEncoder-Setup.exe"
+!ifndef OUTPUT_PATH
+!define OUTPUT_PATH "..\..\dist\MMDFfmpegEncoder-Setup.exe"
+!endif
+OutFile "${OUTPUT_PATH}"
 ; Install into the user's own folder so the config file (FFmpegEncoder.ini)
 ; lives next to the app and is removed together with it on uninstall.
 InstallDir "$LOCALAPPDATA\MMD Ffmpeg Encoder"
@@ -10,7 +13,7 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !define APP_NAME "MMD FFmpeg 编码器"
-!define APP_VERSION "1.1.9-test.1"
+!define APP_VERSION "1.1.9"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MMDFfmpegEncoder"
 
 !insertmacro MUI_PAGE_WELCOME

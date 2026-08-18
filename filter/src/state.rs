@@ -93,6 +93,11 @@ pub struct Shared {
 }
 
 impl Shared {
+    // DirectShow calls the generated COM methods on the graph's apartment
+    // threads; the COM interface handles inside Shared are intentionally not
+    // sent to the FFmpeg worker threads. Keep Arc for shared pin ownership and
+    // document the deliberate clippy exception here.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new() -> std::sync::Arc<Self> {
         std::sync::Arc::new(Shared {
             core: Mutex::new(Core {

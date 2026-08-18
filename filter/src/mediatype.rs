@@ -168,7 +168,7 @@ pub fn make_output_type(fmt: &FormatInfo, fourcc: u32) -> AM_MEDIA_TYPE {
             biHeight: fmt.height,
             biPlanes: 1,
             biBitCount: 24,
-            biCompression: fourcc as u32,
+            biCompression: fourcc,
             biSizeImage: cfg.out_bisizeimage.max(0) as u32,
             biXPelsPerMeter: 0,
             biYPelsPerMeter: 0,
@@ -177,7 +177,7 @@ pub fn make_output_type(fmt: &FormatInfo, fourcc: u32) -> AM_MEDIA_TYPE {
         },
     };
 
-    let extra = cfg.out_cbextra.max(0).min(1024 * 1024) as usize;
+    let extra = cfg.out_cbextra.clamp(0, 1024 * 1024) as usize;
     let mut fmt_buf = Vec::with_capacity(std::mem::size_of::<VIDEOINFOHEADER>() + extra);
     unsafe {
         let src = std::slice::from_raw_parts(

@@ -11,8 +11,11 @@ SDK:
 ```cmd
 native-filter\build.cmd
 native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
+native-filter\build\test_graph.exe --list
 ```
 
 The ABI smoke test loads the DLL without registration and repeats the MMD pin
 interrogation sequence 3000 times, including `IPin::ConnectedTo` while both
-pins are disconnected.
+pins are disconnected. `test_graph.exe` is a DirectShow graph diagnostic
+harness; `--list` verifies that the system compressor category can be queried,
+and its `--raw` mode is safe even when no encoder filter is created.

@@ -54,6 +54,14 @@ cl /nologo /O2 /MT /W4 /EHsc /std:c++17 /permissive- /utf-8 ^
   /Fe:"%BUILD%\abi_smoke.exe" ole32.lib strmiids.lib
 if errorlevel 1 exit /b 1
 
+echo Building graph diagnostic test...
+cl /nologo /O2 /MT /W4 /EHsc /std:c++17 /permissive- /utf-8 ^
+  /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0601 /DWINVER=0x0601 ^
+  /I"%BASE%" /I"%SRC%" /Fo"%BUILD%\obj\test_graph.obj" "%ROOT%tests\test_graph.cpp" ^
+  /Fe:"%BUILD%\test_graph.exe" ole32.lib oleaut32.lib strmiids.lib
+if errorlevel 1 exit /b 1
+
 echo Built %BUILD%\FFmpegVideoEncoder.dll
 echo Built %BUILD%\abi_smoke.exe
+echo Built %BUILD%\test_graph.exe
 endlocal

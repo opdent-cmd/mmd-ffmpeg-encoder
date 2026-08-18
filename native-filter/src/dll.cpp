@@ -68,7 +68,12 @@ public:
             return CLASS_E_NOAGGREGATION;
         }
         HRESULT hr = S_OK;
-        CUnknown* pUnk = m_pTemplate->CreateInstance(NULL, &hr);
+        CUnknown* pUnk = NULL;
+        try {
+            pUnk = m_pTemplate->CreateInstance(NULL, &hr);
+        } catch (...) {
+            return E_OUTOFMEMORY;
+        }
         if (!pUnk) {
             return hr;
         }
@@ -119,7 +124,12 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv)
     }
     for (int i = 0; i < g_cTemplates; i++) {
         if (g_Templates[i].IsClassID(rclsid)) {
-            CClassFactory* pCF = new CClassFactory(&g_Templates[i]);
+            CClassFactory* pCF = NULL;
+            try {
+                pCF = new CClassFactory(&g_Templates[i]);
+            } catch (...) {
+                return E_OUTOFMEMORY;
+            }
             if (!pCF) {
                 return E_OUTOFMEMORY;
             }

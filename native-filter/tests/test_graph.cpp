@@ -1,7 +1,6 @@
 #include <windows.h>
 #include <dshow.h>
 #include <stdio.h>
-#include "ffmpeg_encoder.h"
 
 // Definition of our CLSID for the test harness (header only declares it).
 EXTERN_C const GUID CLSID_FFmpegEncoder = {
@@ -70,16 +69,28 @@ static IPin* GetPin(IBaseFilter* pFilter, PIN_DIRECTION dir, int index)
 static HRESULT AddFilter(IGraphBuilder* pGraph, REFCLSID clsid, const WCHAR* name,
                          IBaseFilter** ppFilter)
 {
+    if (!pGraph || !ppFilter) {
+        return E_POINTER;
+    }
+    *ppFilter = NULL;
     HRESULT hr = CoCreateInstance(clsid, NULL, CLSCTX_INPROC_SERVER,
                                   IID_IBaseFilter, (void**)ppFilter);
     if (FAILED(hr)) {
         return hr;
     }
-    return pGraph->AddFilter(*ppFilter, name);
+    hr = pGraph->AddFilter(*ppFilter, name);
+    if (FAILED(hr)) {
+        (*ppFilter)->Release();
+        *ppFilter = NULL;
+    }
+    return hr;
 }
 
 static HRESULT ConnectPins(IGraphBuilder* pGraph, IBaseFilter* pA, IBaseFilter* pB)
 {
+    if (!pGraph || !pA || !pB) {
+        return E_POINTER;
+    }
     for (int i = 0;; i++) {
         IPin* pOut = GetPin(pA, PINDIR_OUTPUT, i);
         if (!pOut) {
@@ -124,6 +135,9 @@ static void PrintMediaType(IPin* pPin, const WCHAR* label)
         WCHAR name[64];
         StringFromGUID2(mt.subtype, name, 64);
         wprintf(L"%s subtype: %s\n", label, name);
+        if (mt.pUnk) {
+            mt.pUnk->Release();
+        }
         if (mt.pbFormat) {
             CoTaskMemFree(mt.pbFormat);
         }
@@ -138,6 +152,7 @@ static void ListCompressors()
                           IID_ICreateDevEnum, (void**)&pDevEnum);
     if (FAILED(hr)) {
         Fail(L"CoCreateInstance(CLSID_SystemDeviceEnum)", hr);
+        CoUninitialize();
         return;
     }
     IEnumMoniker* pEnum = NULL;
@@ -171,7 +186,10 @@ int wmain(int argc, wchar_t** argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     SetUnhandledExceptionFilter(CrashHandler);
-    g_dbg = _wfopen(L"test_graph.log", L"w");
+    FILE* logFile = NULL;
+    if (_wfopen_s(&logFile, L"test_graph.log", L"w") == 0) {
+        g_dbg = logFile;
+    }
     auto LOG = [&](const WCHAR* s) {
         wprintf(L"%s\n", s);
         if (g_dbg) {
@@ -236,6 +254,9 @@ int wmain(int argc, wchar_t** argv)
     IBaseFilter* pGrab = NULL;
     IBaseFilter* pMux = NULL;
     IBaseFilter* pWr = NULL;
+    IFileSourceFilter* pLoad = NULL;
+    IFileSinkFilter* pSink = NULL;
+    IMediaControl* pMC = NULL;
 
     if (xshow) {
         hr = AddFilter(pGraph, CLSID_MMDxShow, L"MMDxShow", &pSrc);
@@ -341,8 +362,6 @@ int wmain(int argc, wchar_t** argv)
         if (FAILED(hr)) { Fail(L"AddFilter(File Writer)", hr); goto done; }
     }
 
-    IFileSourceFilter* pLoad = NULL;
-    IFileSinkFilter* pSink = NULL;
     if (!xshow) {
         pSrc->QueryInterface(IID_IFileSourceFilter, (void**)&pLoad);
         hr = pLoad ? pLoad->Load(argv[1], NULL) : E_NOINTERFACE;
@@ -407,13 +426,15 @@ int wmain(int argc, wchar_t** argv)
         LOG(L"[ok] source->AVI Mux (raw)");
     }
 
-    IPin* pEncIn = GetPin(pEnc, PINDIR_INPUT, 0);
-    if (pEncIn) {
-        PrintMediaType(pEncIn, L"encoder input");
-        pEncIn->Release();
+    if (pEnc) {
+        IPin* pEncIn = GetPin(pEnc, PINDIR_INPUT, 0);
+        if (pEncIn) {
+            PrintMediaType(pEncIn, L"encoder input");
+            pEncIn->Release();
+        }
     }
 
-    if (diag) {
+    if (diag && pEnc) {
         // Print connection state of the encoder pins.
         IPin* pEncIn2 = GetPin(pEnc, PINDIR_INPUT, 0);
         if (pEncIn2) {
@@ -490,7 +511,6 @@ int wmain(int argc, wchar_t** argv)
                     if (fi.pGraph) fi.pGraph->Release();
                 }
                 IMediaFilter* pMF = NULL;
-                HRESULT hrR = E_FAIL, hrP = E_FAIL;
                 if (SUCCEEDED(pF->QueryInterface(IID_IMediaFilter, (void**)&pMF))) {
                     FILTER_STATE st = State_Stopped;
                     HRESULT hrS = pMF->GetState(500, &st);
@@ -512,7 +532,6 @@ int wmain(int argc, wchar_t** argv)
         return 0;
     }
 
-    IMediaControl* pMC = NULL;
     pGraph->QueryInterface(IID_IMediaControl, (void**)&pMC);
     hr = pMC ? pMC->Run() : E_NOINTERFACE;
     wprintf(L"Run returned 0x%08X\n", hr);

@@ -246,7 +246,7 @@ impl IPin_Impl for InputPin_Impl {
                 }
                 debug_log(&format!(
                     "InputPin::ReceiveConnection connector dir={} name={}",
-                    info.dir.0 as i32, name
+                    info.dir.0, name
                 ));
             }
         }
@@ -361,8 +361,10 @@ impl IPin_Impl for InputPin_Impl {
         if pinfo.is_null() {
             return Err(err(E_POINTER));
         }
-        let mut info = PIN_INFO::default();
-        info.dir = PINDIR_INPUT;
+        let mut info = PIN_INFO {
+            dir: PINDIR_INPUT,
+            ..Default::default()
+        };
         fill_ach_name(&mut info.achName, "FFmpegIn");
         info.pFilter = core::mem::ManuallyDrop::new(self.shared.filter_iface());
         unsafe {
@@ -668,7 +670,7 @@ impl IPin_Impl for OutputPin_Impl {
                 }
                 debug_log(&format!(
                     "OutputPin::Connect peer dir={} name={}",
-                    info.dir.0 as i32, name
+                    info.dir.0, name
                 ));
             }
         }
@@ -836,8 +838,10 @@ impl IPin_Impl for OutputPin_Impl {
         if pinfo.is_null() {
             return Err(err(E_POINTER));
         }
-        let mut info = PIN_INFO::default();
-        info.dir = PINDIR_OUTPUT;
+        let mut info = PIN_INFO {
+            dir: PINDIR_OUTPUT,
+            ..Default::default()
+        };
         fill_ach_name(&mut info.achName, "FFmpegOut");
         info.pFilter = core::mem::ManuallyDrop::new(self.shared.filter_iface());
         unsafe {

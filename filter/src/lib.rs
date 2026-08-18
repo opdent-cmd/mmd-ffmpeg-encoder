@@ -140,7 +140,7 @@ impl ClassFactory_Impl {
         let iid = unsafe { riid.as_ref() }.ok_or(E_POINTER)?;
         if *iid == IBaseFilter::IID || *iid == IUnknown::IID {
             state::always_log("CreateInstance: returning interface");
-            *ppv = raw as *mut c_void;
+            *ppv = raw;
             Ok(())
         } else {
             unsafe {
@@ -157,6 +157,10 @@ impl ClassFactory_Impl {
 // ---------------------------------------------------------------------------
 
 #[no_mangle]
+/// # Safety
+///
+/// The caller must provide valid pointers according to the COM ABI. `ppv`
+/// must point to writable storage for the requested interface pointer.
 pub unsafe extern "system" fn DllGetClassObject(
     rclsid: *const GUID,
     riid: *const GUID,
@@ -193,6 +197,10 @@ pub unsafe extern "system" fn DllGetClassObject(
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// This function has no pointer arguments and is safe to call through the
+/// documented COM DLL entry-point ABI.
 pub unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
     if ACTIVE.load(Ordering::SeqCst) == 0 {
         HRESULT(0)
@@ -293,6 +301,10 @@ unsafe fn register_categories(b_register: bool) -> HRESULT {
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// This function has no pointer arguments and is safe to call through the
+/// documented COM DLL registration ABI.
 pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
     let clsid_key = format!("Software\\Classes\\CLSID\\{}", CLSID_STR);
     let Some(hk) = reg_create(HKEY_LOCAL_MACHINE, &clsid_key) else {
@@ -312,6 +324,10 @@ pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
 }
 
 #[no_mangle]
+/// # Safety
+///
+/// This function has no pointer arguments and is safe to call through the
+/// documented COM DLL registration ABI.
 pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
     let clsid_key = format!("Software\\Classes\\CLSID\\{}", CLSID_STR);
     let p = wide(&clsid_key);
@@ -386,7 +402,7 @@ mod smoke_tests {
     #[test]
     fn disconnected_pin_connected_to_writes_null_peer() {
         let (_, pin) = crate::filter::make_pins(Shared::new());
-        let mut peer = 1usize as *mut c_void;
+        let mut peer = std::ptr::dangling_mut::<c_void>();
 
         let hr = unsafe {
             (Interface::vtable(&pin).ConnectedTo)(Interface::as_raw(&pin), &mut peer)
@@ -405,7 +421,7 @@ mod smoke_tests {
 
         // QueryInterface must keep returning the patched ABI surface.
         let round_trip: IPin = pin.cast::<IUnknown>().unwrap().cast().unwrap();
-        peer = 1usize as *mut c_void;
+        peer = std::ptr::dangling_mut::<c_void>();
         let hr = unsafe {
             (Interface::vtable(&round_trip).ConnectedTo)(
                 Interface::as_raw(&round_trip),

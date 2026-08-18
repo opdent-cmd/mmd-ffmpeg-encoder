@@ -41,6 +41,60 @@ namespace {
         }
         return dir + L"\\" + name;
     }
+
+    std::wstring Trim(std::wstring value)
+    {
+        const size_t first = value.find_first_not_of(L" \t\r\n");
+        if (first == std::wstring::npos) {
+            return std::wstring();
+        }
+        const size_t last = value.find_last_not_of(L" \t\r\n");
+        return value.substr(first, last - first + 1);
+    }
+
+    std::wstring Lower(std::wstring value)
+    {
+        for (WCHAR& ch : value) {
+            if (ch >= L'A' && ch <= L'Z') {
+                ch = static_cast<WCHAR>(ch - L'A' + L'a');
+            }
+        }
+        return value;
+    }
+
+    bool SafeToken(const std::wstring& value)
+    {
+        if (value.empty()) {
+            return false;
+        }
+        for (WCHAR ch : value) {
+            if (!((ch >= L'a' && ch <= L'z') ||
+                  (ch >= L'A' && ch <= L'Z') ||
+                  (ch >= L'0' && ch <= L'9') ||
+                  ch == L'_' || ch == L'-' || ch == L'.')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool SamePath(const std::wstring& left, const std::wstring& right)
+    {
+        if (left.empty() || right.empty()) {
+            return false;
+        }
+        WCHAR leftBuf[32768] = {};
+        WCHAR rightBuf[32768] = {};
+        const DWORD leftLen = GetFullPathNameW(left.c_str(), ARRAYSIZE(leftBuf),
+                                               leftBuf, NULL);
+        const DWORD rightLen = GetFullPathNameW(right.c_str(), ARRAYSIZE(rightBuf),
+                                                rightBuf, NULL);
+        if (leftLen == 0 || rightLen == 0 ||
+            leftLen >= ARRAYSIZE(leftBuf) || rightLen >= ARRAYSIZE(rightBuf)) {
+            return _wcsicmp(left.c_str(), right.c_str()) == 0;
+        }
+        return _wcsicmp(leftBuf, rightBuf) == 0;
+    }
 }
 
 static void AppendQuoted(std::wstring& s, const std::wstring& arg);
@@ -110,6 +164,9 @@ GUID CFFmpegEncoder::FourccGuid(DWORD fcc)
 
 HRESULT CFFmpegEncoder::CheckTransform(const CMediaType* mtIn, const CMediaType* mtOut)
 {
+    if (!mtOut) {
+        return E_POINTER;
+    }
     HRESULT hr = CheckInputType(mtIn);
     if (FAILED(hr)) {
         return hr;
@@ -160,7 +217,9 @@ HRESULT CFFmpegEncoder::GetMediaType(int iPosition, CMediaType* pmt)
     pmt->SetFormatType(&FORMAT_VideoInfo);
     pmt->SetTemporalCompression(TRUE);
     pmt->SetSampleSize(0);
-    pmt->SetFormat((BYTE*)&vih, sizeof(vih));
+    if (!pmt->SetFormat((BYTE*)&vih, sizeof(vih))) {
+        return E_OUTOFMEMORY;
+    }
     return S_OK;
 }
 
@@ -305,7 +364,10 @@ HRESULT CFFmpegEncoder::ReadConfig()
     WCHAR buf[32768];
     GetPrivateProfileStringW(L"ffmpeg", L"path", L"ffmpeg", buf,
                              ARRAYSIZE(buf), ini.c_str());
-    m_ffmpegPath = buf;
+    m_ffmpegPath = Trim(buf);
+    if (m_ffmpegPath.empty()) {
+        m_ffmpegPath = L"ffmpeg";
+    }
     if (m_ffmpegPath != L"ffmpeg" && !FileExists(m_ffmpegPath)) {
         const std::wstring installed = JoinPath(JoinPath(dllDir, L"bin"), L"ffmpeg.exe");
         const std::wstring besideDll = JoinPath(dllDir, L"ffmpeg.exe");
@@ -314,7 +376,10 @@ HRESULT CFFmpegEncoder::ReadConfig()
     }
     GetPrivateProfileStringW(L"video", L"codec", L"libx264", buf,
                              ARRAYSIZE(buf), ini.c_str());
-    m_codec = buf;
+    m_codec = Lower(Trim(buf));
+    if (!SafeToken(m_codec)) {
+        m_codec = L"libx264";
+    }
     if (_wcsnicmp(m_codec.c_str(), L"auto", 4) == 0) {
         // The most portable automatic path is the bundled software encoder.
         // Hardware encoders remain available when selected explicitly.
@@ -329,19 +394,35 @@ HRESULT CFFmpegEncoder::ReadConfig()
     }
     GetPrivateProfileStringW(L"video", L"preset", L"veryfast", buf,
                              ARRAYSIZE(buf), ini.c_str());
-    m_preset = buf;
+    m_preset = Trim(buf);
+    if (!SafeToken(m_preset)) {
+        m_preset = L"veryfast";
+    }
     GetPrivateProfileStringW(L"video", L"extra", L"", buf,
                              ARRAYSIZE(buf), ini.c_str());
-    m_extra = buf;
+    m_extra = Trim(buf);
     GetPrivateProfileStringW(L"video", L"container", L"", buf,
                              ARRAYSIZE(buf), ini.c_str());
-    m_container = buf;
+    m_container = Lower(Trim(buf));
+    if (m_container != L"" && m_container != L"mp4" &&
+        m_container != L"m4v" && m_container != L"mkv" &&
+        m_container != L"matroska" && m_container != L"mov" &&
+        m_container != L"webm") {
+        m_container.clear();
+    }
     GetPrivateProfileStringW(L"video", L"container_path", L"", buf,
                              ARRAYSIZE(buf), ini.c_str());
-    m_containerPath = buf;
+    m_containerPath = Trim(buf);
     GetPrivateProfileStringW(L"video", L"alpha_format", L"", buf,
                              ARRAYSIZE(buf), ini.c_str());
-    m_alphaFormat = buf;
+    m_alphaFormat = Lower(Trim(buf));
+    if (m_alphaFormat != L"" && m_alphaFormat != L"webm_vp9" &&
+        m_alphaFormat != L"vp9" && m_alphaFormat != L"webm_av1" &&
+        m_alphaFormat != L"av1" && m_alphaFormat != L"mov_prores" &&
+        m_alphaFormat != L"prores" && m_alphaFormat != L"mkv_ffv1" &&
+        m_alphaFormat != L"ffv1") {
+        m_alphaFormat.clear();
+    }
     m_crf = GetPrivateProfileIntW(L"video", L"crf", 18, ini.c_str());
     m_bitrate = GetPrivateProfileIntW(L"video", L"bitrate", 0, ini.c_str());
     m_crf = max(0, min(m_crf, 51));
@@ -476,6 +557,7 @@ bool CFFmpegEncoder::RunCommand(const std::wstring& command, DWORD timeoutMs)
 bool CFFmpegEncoder::MergeAudio()
 {
     if (m_aviPath.empty() || m_extraPath.empty() ||
+        SamePath(m_aviPath, m_extraPath) ||
         !FileExists(m_aviPath) || !FileExists(m_extraPath)) {
         return false;
     }
@@ -484,7 +566,7 @@ bool CFFmpegEncoder::MergeAudio()
         ? m_extraPath + L".merge.mp4"
         : m_extraPath.substr(0, dot) + L".merge" + m_extraPath.substr(dot);
     const std::wstring ext = dot == std::wstring::npos
-        ? L"" : m_extraPath.substr(dot + 1);
+        ? L"" : Lower(m_extraPath.substr(dot + 1));
 
     std::wstring cmd;
     AppendQuoted(cmd, m_ffmpegPath);
@@ -833,11 +915,22 @@ void CFFmpegEncoder::StopFFmpeg()
         }
     }
     if (m_hThread) {
-        if (WaitForSingleObject(m_hThread, 5000) != WAIT_OBJECT_0 &&
-            m_hChildStdoutR) {
-            CloseHandle(m_hChildStdoutR);
-            m_hChildStdoutR = NULL;
-            WaitForSingleObject(m_hThread, 2000);
+        DWORD wait = WaitForSingleObject(m_hThread, 5000);
+        if (wait != WAIT_OBJECT_0) {
+            // The reader is doing a synchronous ReadFile on the pipe. Cancel
+            // that I/O before waiting again; never close the thread handle
+            // while it may still be executing against this filter object.
+            CancelSynchronousIo(m_hThread);
+            if (m_hChildStdoutR) {
+                CloseHandle(m_hChildStdoutR);
+                m_hChildStdoutR = NULL;
+            }
+            wait = WaitForSingleObject(m_hThread, 5000);
+        }
+        if (wait != WAIT_OBJECT_0) {
+            // A live reader owns a pointer to this object. Waiting here is
+            // preferable to returning with a potential use-after-free.
+            WaitForSingleObject(m_hThread, INFINITE);
         }
         CloseHandle(m_hThread);
         m_hThread = NULL;

@@ -549,7 +549,7 @@ impl Encoder {
         // encoder fails to open (it keeps waiting on stdin), so we must watch
         // its error output to detect e.g. an NVENC/driver mismatch.
         let stderr = child.stderr.take().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::Other, "no ffmpeg stderr")
+            std::io::Error::other("no ffmpeg stderr")
         })?;
         let err_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let eb2 = err_buf.clone();
@@ -569,41 +569,36 @@ impl Encoder {
         // Give ffmpeg a moment to initialize; fail fast on early exit or an
         // encoder-open error in stderr instead of hanging on the pipe.
         for _ in 0..100 {
-            match child.try_wait()? {
-                Some(status) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let text = err_buf.lock().unwrap().clone();
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!(
-                            "ffmpeg exited during startup (code {}){}",
-                            status,
-                            if text.is_empty() {
-                                String::new()
-                            } else {
-                                format!(": {}", text.trim())
-                            }
-                        ),
-                    ));
-                }
-                None => {}
+            if let Some(status) = child.try_wait()? {
+                let _ = child.kill();
+                let _ = child.wait();
+                let text = err_buf.lock().unwrap().clone();
+                return Err(std::io::Error::other(format!(
+                    "ffmpeg exited during startup (code {}){}",
+                    status,
+                    if text.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", text.trim())
+                    }
+                )));
             }
             let text = err_buf.lock().unwrap().clone();
             if let Some(kw) = FAIL_KEYWORDS.iter().find(|k| text.contains(**k)) {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("ffmpeg encoder open failed (\"{}\"): {}", kw, text.trim()),
-                ));
+                return Err(std::io::Error::other(format!(
+                    "ffmpeg encoder open failed (\"{}\"): {}",
+                    kw,
+                    text.trim()
+                )));
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::Other, "no ffmpeg stdout")
+            std::io::Error::other("no ffmpeg stdout")
         })?;
 
         let packets: Arc<Mutex<VecDeque<Vec<u8>>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -652,13 +647,10 @@ impl Encoder {
     pub fn write_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
         if self.failed() {
             let text = self.err_buf.lock().unwrap().clone();
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "ffmpeg encoder failed while running: {}",
-                    text.trim()
-                ),
-            ));
+            return Err(std::io::Error::other(format!(
+                "ffmpeg encoder failed while running: {}",
+                text.trim()
+            )));
         }
         match self.stdin.as_mut() {
             Some(s) => s.write_all(data),
@@ -823,10 +815,7 @@ impl AnnexB {
         let mut keep_from = first; // keep the leading start code in the buffer
         let mut nal = Vec::new();
 
-        loop {
-            let Some((next, cl)) = Self::find_start(&self.buf, nal_start) else {
-                break;
-            };
+        while let Some((next, cl)) = Self::find_start(&self.buf, nal_start) {
             code_len = cl;
             if next > nal_start {
                 let mut nal_end = next;

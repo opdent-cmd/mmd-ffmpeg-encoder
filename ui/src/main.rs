@@ -74,18 +74,26 @@ fn load_config() -> Config {
         let value = line[eq + 1..].trim().to_string();
         match section.as_str() {
             "ffmpeg" if key == "path" => cfg.ffmpeg_path = value,
-            "ffmpeg" if key == "debug" => cfg.debug = value == "1",
-            "video" if key == "codec" => cfg.codec = value,
+            "ffmpeg" if key == "debug" => {
+                cfg.debug = value == "1" || value.eq_ignore_ascii_case("true")
+            }
+            "video" if key == "codec" => cfg.codec = value.to_ascii_lowercase(),
             "video" if key == "preset" => cfg.preset = value,
             "video" if key == "crf" => cfg.crf = value.parse().unwrap_or(18),
             "video" if key == "bitrate" => cfg.bitrate = value.parse().unwrap_or(0),
-            "video" if key == "rate_mode" => cfg.rate_mode = value,
+            "video" if key == "rate_mode" => cfg.rate_mode = value.to_ascii_lowercase(),
             "video" if key == "extra" => cfg.extra = value,
-            "video" if key == "container" => cfg.container = value,
+            "video" if key == "container" => cfg.container = value.to_ascii_lowercase(),
             "video" if key == "container_path" => cfg.container_path = value,
-            "video" if key == "alpha_format" => cfg.alpha_format = value,
-            "video" if key == "delete_avi" => cfg.delete_avi = value == "1",
-            "video" if key == "merge_audio" => cfg.merge_audio = value == "1",
+            "video" if key == "alpha_format" => {
+                cfg.alpha_format = value.to_ascii_lowercase()
+            }
+            "video" if key == "delete_avi" => {
+                cfg.delete_avi = value == "1" || value.eq_ignore_ascii_case("true")
+            }
+            "video" if key == "merge_audio" => {
+                cfg.merge_audio = value == "1" || value.eq_ignore_ascii_case("true")
+            }
             _ => {}
         }
     }
@@ -308,8 +316,7 @@ fn main() -> Result<(), slint::PlatformError> {
             .trim()
             .parse()
             .unwrap_or(8000)
-            .max(1)
-            .min(400_000);
+            .clamp(1, 400_000);
         let container = ui.get_container_index().max(0) as usize;
         let alpha = ui.get_alpha_index().max(0) as usize;
 
