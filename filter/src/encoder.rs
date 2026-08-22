@@ -1,5 +1,6 @@
 //! ffmpeg child process + Annex B packet splitting.
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 #[cfg(windows)]
@@ -329,13 +330,19 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
                 a.push("-bufsize".into());
                 a.push(bufsize.to_string());
                 if nvenc {
-                    // NVENC otherwise keeps a large VBV undershoot on flat
-                    // scenes. Strict GOP + the explicit CBR flag make the
-                    // hardware insert filler and hold the target bitrate.
+                    // Strict GOP keeps the controller stable. Newer FFmpeg
+                    // builds additionally expose cbr_padding, which inserts
+                    // filler NAL units on flat scenes and is required for a
+                    // true constant transport bitrate. Older builds simply
+                    // omit it because they reject the option.
                     a.push("-cbr".into());
                     a.push("1".into());
                     a.push("-strict_gop".into());
                     a.push("1".into());
+                    if nvenc_cbr_padding_supported(cfg) {
+                        a.push("-cbr_padding".into());
+                        a.push("1".into());
+                    }
                 } else if amf {
                     // AMF exposes HRD and filler controls separately.
                     a.push("-enforce_hrd".into());
@@ -407,6 +414,38 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
     for arg in cfg.extra.split_whitespace() {
         a.push(arg.to_string());
     }
+}
+
+fn nvenc_cbr_padding_supported(cfg: &Config) -> bool {
+    static CACHE: std::sync::OnceLock<Mutex<HashMap<String, bool>>> = std::sync::OnceLock::new();
+    let key = format!("{}|{}", cfg.ffmpeg_path, cfg.codec);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(value) = cache.lock().unwrap().get(&key).copied() {
+        return value;
+    }
+    let encoder = cfg.codec.trim();
+    let result = Command::new(&cfg.ffmpeg_path)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-h",
+            &format!("encoder={}", encoder),
+        ])
+        .creation_flags(0x08000000)
+        .output()
+        .map(|o| {
+            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&o.stderr));
+            o.status.success() && text.contains("cbr_padding")
+        })
+        .unwrap_or(false);
+    cache.lock().unwrap().insert(key, result);
+    crate::state::debug_log(&format!(
+        "NVENC cbr_padding capability for {}: {}",
+        encoder, result
+    ));
+    result
 }
 
 /// CPU fallback config for when a GPU encoder is unavailable.

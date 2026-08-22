@@ -671,6 +671,9 @@ void CFFmpegEncoder::AppendCodecArgs(std::wstring& cmd,
                 cmd += numBuf;
                 if (nvenc) {
                     cmd += L" -rc cbr -cbr 1 -strict_gop 1";
+                    if (m_nvencCbrPadding) {
+                        cmd += L" -cbr_padding 1";
+                    }
                 } else if (amf) {
                     cmd += L" -rc cbr -enforce_hrd 1 -filler_data 1";
                 } else if (qsv) {
@@ -897,6 +900,7 @@ HRESULT CFFmpegEncoder::StartFFmpeg()
 
 void CFFmpegEncoder::SelectPortableCodec()
 {
+    m_nvencCbrPadding = false;
     const bool hardware = m_codec.find(L"nvenc") != std::wstring::npos ||
                           m_codec.find(L"qsv") != std::wstring::npos ||
                           m_codec.find(L"amf") != std::wstring::npos;
@@ -917,6 +921,26 @@ void CFFmpegEncoder::SelectPortableCodec()
     AppendCodecArgs(probe, m_codec, m_preset, false);
     probe += L" -f null -";
     if (RunCommand(probe, 20000)) {
+        // FFmpeg 8+ can ask NVENC to insert filler NAL units. This is the
+        // only way to keep a flat scene at the requested CBR bitrate. Probe
+        // the exact same command with the optional flag so FFmpeg 7.x and
+        // older vendor builds remain usable.
+        if (m_nvenc && m_cbr) {
+            const bool oldPadding = m_nvencCbrPadding;
+            m_nvencCbrPadding = true;
+            std::wstring paddingProbe;
+            AppendQuoted(paddingProbe, m_ffmpegPath);
+            paddingProbe += L" -hide_banner -loglevel error -nostdin";
+            paddingProbe += L" -f lavfi -i color=black:s=160x120:r=30:d=0.1 -frames:v 1";
+            AppendCodecArgs(paddingProbe, m_codec, m_preset, false);
+            paddingProbe += L" -f null -";
+            if (!RunCommand(paddingProbe, 20000)) {
+                m_nvencCbrPadding = oldPadding;
+                OutputDebugStringW(L"MMD FFmpeg Encoder: NVENC cbr_padding unsupported; using driver CBR without filler\n");
+            } else {
+                OutputDebugStringW(L"MMD FFmpeg Encoder: NVENC cbr_padding enabled for strict CBR\n");
+            }
+        }
         return;
     }
 
@@ -934,6 +958,7 @@ void CFFmpegEncoder::SelectPortableCodec()
     }
     m_preset = L"veryfast";
     m_nvenc = m_qsv = m_amf = false;
+    m_nvencCbrPadding = false;
 }
 
 void CFFmpegEncoder::StopFFmpeg()

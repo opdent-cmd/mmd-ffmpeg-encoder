@@ -80,6 +80,9 @@ private:
     std::wstring m_aviCodec;       // codec written to the MMD-side AVI
     bool    m_lossless = false;
     bool    m_nvenc = false;
+    // Newer FFmpeg/NVENC builds expose bitstream filler insertion. Keep this
+    // runtime-detected because the bundled 7.x builds do not have the option.
+    bool    m_nvencCbrPadding = false;
     bool    m_qsv = false;
     bool    m_amf = false;
 
