@@ -263,6 +263,28 @@ fn detect_ffmpeg_path() -> String {
     "ffmpeg".to_string()
 }
 
+fn is_chinese_system() -> bool {
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetUserDefaultLocaleName(locale_name: *mut u16, count: u32) -> i32;
+        }
+        let mut buf = [0u16; LOCALE_NAME_MAX_LENGTH];
+        let len = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as u32) };
+        if len > 0 {
+            let locale = String::from_utf16_lossy(&buf[..len.saturating_sub(1) as usize]);
+            return locale.to_ascii_lowercase().starts_with("zh");
+        }
+    }
+    std::env::var("LC_ALL")
+        .or_else(|_| std::env::var("LANG"))
+        .map(|v| v.to_ascii_lowercase().starts_with("zh"))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+const LOCALE_NAME_MAX_LENGTH: usize = 85;
+
 fn run_hidden(mut command: Command) -> Option<String> {
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -279,7 +301,7 @@ fn run_hidden(mut command: Command) -> Option<String> {
 
 /// Use FFmpeg's own encoder registry plus Windows adapter names. This avoids
 /// vendor SDKs and works with both Windows 10 and Windows 11 drivers.
-fn probe_hardware(ffmpeg_path: &str) -> String {
+fn probe_hardware(ffmpeg_path: &str, chinese: bool) -> String {
     let encoders = run_hidden({
         let mut c = Command::new(ffmpeg_path);
         c.args(["-hide_banner", "-encoders"]);
@@ -324,19 +346,42 @@ fn probe_hardware(ffmpeg_path: &str) -> String {
     .map(str::to_string)
     .collect::<Vec<_>>();
     let gpu = if gpu_names.is_empty() {
-        "GPU 适配器：未能读取（不影响 FFmpeg 探测）".to_string()
+        if chinese {
+            "GPU 适配器：无法读取（不影响 FFmpeg 探测）".to_string()
+        } else {
+            "GPU adapters: unavailable (FFmpeg probing is unaffected)".to_string()
+        }
     } else {
-        format!("GPU 适配器：{}", gpu_names.join("、"))
+        if chinese {
+            format!("GPU 适配器：{}", gpu_names.join("、"))
+        } else {
+            format!("GPU adapters: {}", gpu_names.join(", "))
+        }
     };
     let codec = if codecs.is_empty() {
-        "可用硬件编码：未发现，将使用 CPU / 自动回退".to_string()
+        if chinese {
+            "硬件编码器：未发现，将使用 CPU / 自动回退".to_string()
+        } else {
+            "Hardware encoders: none found; CPU / automatic fallback will be used".to_string()
+        }
     } else {
-        format!("可用硬件编码：{}", codecs.join("、"))
+        if chinese {
+            format!("硬件编码器：{}", codecs.join("、"))
+        } else {
+            format!("Hardware encoders: {}", codecs.join(", "))
+        }
     };
-    format!(
-        "{}\n{}\n探测来源：FFmpeg 编码器列表 + Windows 适配器信息",
-        gpu, codec
-    )
+    if chinese {
+        format!(
+            "{}\n{}\n来源：FFmpeg 编码器列表 + Windows 适配器信息",
+            gpu, codec
+        )
+    } else {
+        format!(
+            "{}\n{}\nSource: FFmpeg encoder list + Windows adapters",
+            gpu, codec
+        )
+    }
 }
 
 /// Compact path for the footer: "…\MMDFfmpegEncoder\FFmpegEncoder.ini".
@@ -363,6 +408,8 @@ fn shorten_path(path: &str) -> String {
 fn main() -> Result<(), slint::PlatformError> {
     let ui = MainWindow::new()?;
     let cfg = load_config();
+    let chinese = is_chinese_system();
+    ui.set_chinese(chinese);
 
     ui.set_vendor_index(vendor_of(&cfg.codec) as i32);
     ui.set_codec_index(codec_of(&cfg.codec) as i32);
@@ -387,13 +434,13 @@ fn main() -> Result<(), slint::PlatformError> {
     } else {
         cfg.ffmpeg_path.clone()
     };
-    ui.set_hardware_status(probe_hardware(&probe_path).into());
+    ui.set_hardware_status(probe_hardware(&probe_path, chinese).into());
 
     let weak_probe = ui.as_weak();
     ui.on_refresh_hardware(move || {
         if let Some(ui) = weak_probe.upgrade() {
             let path = detect_ffmpeg_path();
-            ui.set_hardware_status(probe_hardware(&path).into());
+            ui.set_hardware_status(probe_hardware(&path, chinese).into());
         }
     });
 
@@ -467,10 +514,18 @@ fn main() -> Result<(), slint::PlatformError> {
         }
         match save_config(&cfg) {
             Ok(()) => {
-                ui.set_status_text("已保存 ✓ 下次 MMD 渲染时生效".into());
+                ui.set_status_text(if chinese {
+                    "已保存 ✓ 下次 MMD 渲染时生效".into()
+                } else {
+                    "Saved ✓ Applied to the next MMD render".into()
+                });
             }
             Err(e) => {
-                ui.set_status_text(format!("保存失败：{}", e).into());
+                ui.set_status_text(if chinese {
+                    format!("保存失败：{}", e).into()
+                } else {
+                    format!("Save failed: {}", e).into()
+                });
             }
         }
     });

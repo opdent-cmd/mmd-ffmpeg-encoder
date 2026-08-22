@@ -25,6 +25,8 @@ Slint configuration UI is unchanged.
 - The configuration UI lists Windows GPU adapters and hardware encoders
   registered by the bundled FFmpeg build (NVENC/QSV/AMF), while still allowing
   an explicit hardware choice; runtime preflight falls back to CPU if needed.
+- The settings UI and installer follow the system language: Simplified Chinese
+  for Chinese locales, English everywhere else.
 - Output: MP4 (default) / MKV / legacy AVI; the temporary AVI is removed
   after a successful render.
 - Transparent output: WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1 lossless)

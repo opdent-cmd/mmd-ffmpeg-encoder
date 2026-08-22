@@ -1,7 +1,18 @@
 ﻿Unicode true
 !include "MUI2.nsh"
 
-Name "MMD FFmpeg 编码器"
+LangString PRODUCT_NAME 1033 "MMD FFmpeg Encoder"
+LangString PRODUCT_NAME 2052 "MMD FFmpeg 编码器"
+LangString INSTALL_SECTION 1033 "Install"
+LangString INSTALL_SECTION 2052 "安装"
+LangString CONFIG_SHORTCUT 1033 "Settings.lnk"
+LangString CONFIG_SHORTCUT 2052 "配置.lnk"
+LangString UNINSTALL_SHORTCUT 1033 "Uninstall.lnk"
+LangString UNINSTALL_SHORTCUT 2052 "卸载.lnk"
+LangString OPEN_CONFIG 1033 "Open settings"
+LangString OPEN_CONFIG 2052 "打开配置界面"
+
+Name "$(PRODUCT_NAME)"
 !ifndef OUTPUT_PATH
 !define OUTPUT_PATH "..\..\dist\MMDFfmpegEncoder-Setup.exe"
 !endif
@@ -12,7 +23,7 @@ InstallDir "$LOCALAPPDATA\MMD Ffmpeg Encoder"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
-!define APP_NAME "MMD FFmpeg 编码器"
+!define APP_NAME "$(PRODUCT_NAME)"
 !define APP_VERSION "1.2.0"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MMDFfmpegEncoder"
 
@@ -22,15 +33,16 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\MMDEncoderConfig.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "打开配置界面"
+!define MUI_FINISHPAGE_RUN_TEXT "$(OPEN_CONFIG)"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
+!insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-Section "安装" SecMain
+Section "$(INSTALL_SECTION)" SecMain
   SetOutPath "$INSTDIR\bin"
   File "..\bin\ffmpeg.exe"
 
@@ -72,9 +84,9 @@ Section "安装" SecMain
   ; even though the installer itself is a 32-bit process.
   ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s "$INSTDIR\FFmpegVideoEncoder.dll"'
 
-  CreateDirectory "$SMPROGRAMS\MMD FFmpeg 编码器"
-  CreateShortcut "$SMPROGRAMS\MMD FFmpeg 编码器\配置.lnk" "$INSTDIR\MMDEncoderConfig.exe"
-  CreateShortcut "$SMPROGRAMS\MMD FFmpeg 编码器\卸载.lnk" "$INSTDIR\uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\$(PRODUCT_NAME)"
+  CreateShortcut "$SMPROGRAMS\$(PRODUCT_NAME)\$(CONFIG_SHORTCUT)" "$INSTDIR\MMDEncoderConfig.exe"
+  CreateShortcut "$SMPROGRAMS\$(PRODUCT_NAME)\$(UNINSTALL_SHORTCUT)" "$INSTDIR\uninstall.exe"
 
   ; Uninstaller + Add/Remove Programs entry (64-bit registry view).
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -91,9 +103,9 @@ SectionEnd
 Section "Uninstall"
   ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /u /s "$INSTDIR\FFmpegVideoEncoder.dll"'
 
-  Delete "$SMPROGRAMS\MMD FFmpeg 编码器\配置.lnk"
-  Delete "$SMPROGRAMS\MMD FFmpeg 编码器\卸载.lnk"
-  RMDir "$SMPROGRAMS\MMD FFmpeg 编码器"
+  Delete "$SMPROGRAMS\$(PRODUCT_NAME)\$(CONFIG_SHORTCUT)"
+  Delete "$SMPROGRAMS\$(PRODUCT_NAME)\$(UNINSTALL_SHORTCUT)"
+  RMDir "$SMPROGRAMS\$(PRODUCT_NAME)"
 
   ; Remove everything, including the user config file, and any legacy
   ; APPDATA folder from older versions.
