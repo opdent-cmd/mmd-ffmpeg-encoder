@@ -856,6 +856,21 @@ HRESULT CFFmpegEncoder::StartFFmpeg()
             hLog = NULL;
         }
     }
+    if (hLog) {
+        const int bytes = WideCharToMultiByte(CP_UTF8, 0, cmd.c_str(),
+                                              static_cast<int>(cmd.size()),
+                                              NULL, 0, NULL, NULL);
+        if (bytes > 0) {
+            std::string utf8(static_cast<size_t>(bytes), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, cmd.c_str(),
+                                static_cast<int>(cmd.size()), utf8.data(),
+                                bytes, NULL, NULL);
+            utf8.append("\r\n");
+            DWORD written = 0;
+            WriteFile(hLog, utf8.data(), static_cast<DWORD>(utf8.size()),
+                      &written, NULL);
+        }
+    }
 
     STARTUPINFOW si;
     ZeroMemory(&si, sizeof(si));
