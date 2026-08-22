@@ -1298,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg_encoder"
-version = "1.1.9"
+version = "1.2.0"
 dependencies = [
  "windows 0.61.3",
  "windows-core 0.61.2",
@@ -2794,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "mmd_encoder_config"
-version = "1.1.9"
+version = "1.2.0"
 dependencies = [
  "slint",
  "slint-build",

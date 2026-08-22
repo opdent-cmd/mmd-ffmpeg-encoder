@@ -3,7 +3,7 @@ import { Button, ComboBox, LineEdit, Palette } from "std-widgets.slint";
 export component MainWindow inherits Window {
     title: "MMD FFmpeg 编码器配置";
     width: 520px;
-    height: 520px;
+    height: 640px;
     // Windows system fonts without CJK coverage (e.g. the default Slint
     // sans-serif) render Chinese text as boxes (口口口). Microsoft YaHei
     // ships with Windows 10/11 and covers both Latin and CJK glyphs.
@@ -27,8 +27,10 @@ export component MainWindow inherits Window {
     in-out property <string> status-text: "就绪";
     in-out property <string> config-path: "";
     in-out property <string> config-short: "";
+    in-out property <string> hardware-status: "正在探测 FFmpeg 和 GPU...";
 
     callback save-requested;
+    callback refresh-hardware;
 
     VerticalLayout {
         padding: 24px;
@@ -93,7 +95,7 @@ export component MainWindow inherits Window {
                 ComboBox {
                     current-index <=> root.rate-index;
                     enabled: root.alpha-index == 0;
-                    model: ["自动（质量优先）", "动态码率 (VBR)"];
+                    model: ["自动（质量优先，CRF）", "动态码率 (VBR)", "恒定码率 (CBR)"];
                 }
             }
             Row {
@@ -107,8 +109,8 @@ export component MainWindow inherits Window {
                 LineEdit {
                     text <=> root.kbps-input;
                     input-type: InputType.number;
-                    // Linked state: manual bitrate is only usable in VBR mode.
-                    enabled: root.alpha-index == 0 && root.rate-index == 1;
+                    // Manual bitrate is used by both VBR and CBR.
+                    enabled: root.alpha-index == 0 && root.rate-index != 0;
                 }
             }
             Row {
@@ -146,6 +148,37 @@ export component MainWindow inherits Window {
             color: #8a6d1a;
             visible: root.alpha-index != 0;
             wrap: word-wrap;
+        }
+
+        Rectangle {
+            background: #f4f7fb;
+            border-width: 1px;
+            border-color: #d9e2ef;
+            border-radius: 4px;
+            min-height: 94px;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 5px;
+                HorizontalLayout {
+                    Text {
+                        text: "硬件能力探测";
+                        font-weight: 700;
+                        color: Palette.foreground;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: "重新探测";
+                        clicked => { refresh-hardware(); }
+                    }
+                }
+                Text {
+                    text: root.hardware-status;
+                    font-size: 11px;
+                    color: #425466;
+                    wrap: word-wrap;
+                    vertical-stretch: 1;
+                }
+            }
         }
 
         // Status + save button on the same line, tight to the form.

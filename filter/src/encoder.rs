@@ -73,11 +73,7 @@ pub fn codec_supported(cfg: &Config) -> bool {
 }
 
 fn probe_codec(cfg: &Config) -> bool {
-    let mut args: Vec<String> = vec![
-        "-hide_banner".into(),
-        "-loglevel".into(),
-        "warning".into(),
-    ];
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "warning".into()];
     if cfg.codec.contains("qsv") && alpha_mode(cfg).is_none() {
         args.push("-init_hw_device".into());
         args.push("qsv=hw".into());
@@ -127,10 +123,7 @@ fn run_probe(ffmpeg_path: &str, args: &[String], label: &str) -> bool {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            crate::state::debug_log(&format!(
-                "codec probe spawn failed ({}): {}",
-                label, e
-            ));
+            crate::state::debug_log(&format!("codec probe spawn failed ({}): {}", label, e));
             return false;
         }
     };
@@ -147,8 +140,7 @@ fn run_probe(ffmpeg_path: &str, args: &[String], label: &str) -> bool {
             match r.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    et2
-                        .lock()
+                    et2.lock()
                         .unwrap()
                         .push_str(&String::from_utf8_lossy(&buf[..n]));
                 }
@@ -186,10 +178,7 @@ fn run_probe(ffmpeg_path: &str, args: &[String], label: &str) -> bool {
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            crate::state::debug_log(&format!(
-                "codec probe {} timed out after 20s",
-                label
-            ));
+            crate::state::debug_log(&format!("codec probe {} timed out after 20s", label));
             return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -317,12 +306,29 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
         a.push(cfg.preset.clone());
     }
     let have_bitrate = cfg.bitrate > 0;
+    let cbr = cfg.rate_mode.eq_ignore_ascii_case("cbr") && have_bitrate;
+    let bufsize = cfg.bitrate.saturating_mul(2).max(cfg.bitrate);
     if gpu {
         if have_bitrate {
-            // VBR: average bitrate target; ffmpeg picks the encoder's
-            // variable-bitrate default when only -b:v is given.
+            if cbr {
+                // NVENC and AMF expose an explicit CBR switch. QSV selects
+                // bitrate control from b/min/max/bufsize and does not expose
+                // rc_mode in older bundled FFmpeg builds.
+                if nvenc || amf {
+                    a.push("-rc".into());
+                    a.push("cbr".into());
+                }
+            }
             a.push("-b:v".into());
             a.push(cfg.bitrate.to_string());
+            if cbr {
+                a.push("-minrate".into());
+                a.push(cfg.bitrate.to_string());
+                a.push("-maxrate".into());
+                a.push(cfg.bitrate.to_string());
+                a.push("-bufsize".into());
+                a.push(bufsize.to_string());
+            }
         } else if nvenc {
             a.push("-qp".into());
             a.push("23".into());
@@ -338,6 +344,21 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
     } else if have_bitrate {
         a.push("-b:v".into());
         a.push(cfg.bitrate.to_string());
+        if cbr {
+            a.push("-minrate".into());
+            a.push(cfg.bitrate.to_string());
+            a.push("-maxrate".into());
+            a.push(cfg.bitrate.to_string());
+            a.push("-bufsize".into());
+            a.push(bufsize.to_string());
+            // libx264 exposes the generic nal-hrd switch. libx265 uses its
+            // own x265-params syntax, so do not pass this H.264-only option
+            // to HEVC encoders.
+            if cfg.codec.contains("264") {
+                a.push("-nal-hrd".into());
+                a.push("cbr".into());
+            }
+        }
     } else if cfg.crf > 0 {
         a.push("-crf".into());
         a.push(cfg.crf.to_string());
@@ -348,10 +369,7 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
         a.push("-pix_fmt".into());
         a.push("yuv420p".into());
     }
-    if !lossless
-        && !nvenc
-        && (cfg.codec.contains("264") || cfg.codec.contains("265"))
-    {
+    if !lossless && !nvenc && (cfg.codec.contains("264") || cfg.codec.contains("265")) {
         a.push("-bf".into());
         a.push("0".into());
     }
@@ -533,10 +551,7 @@ const FAIL_KEYWORDS: [&str; 7] = [
 
 impl Encoder {
     pub fn start(cfg: &Config, fmt: &FormatInfo) -> std::io::Result<Self> {
-        crate::state::always_log(&format!(
-            "Encoder::start args: {:?}",
-            build_args(cfg, fmt)
-        ));
+        crate::state::always_log(&format!("Encoder::start args: {:?}", build_args(cfg, fmt)));
         let mut cmd = Command::new(&cfg.ffmpeg_path);
         cmd.args(build_args(cfg, fmt))
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
@@ -548,9 +563,10 @@ impl Encoder {
         // Read stderr in the background: ffmpeg often does NOT exit when the
         // encoder fails to open (it keeps waiting on stdin), so we must watch
         // its error output to detect e.g. an NVENC/driver mismatch.
-        let stderr = child.stderr.take().ok_or_else(|| {
-            std::io::Error::other("no ffmpeg stderr")
-        })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| std::io::Error::other("no ffmpeg stderr"))?;
         let err_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let eb2 = err_buf.clone();
         std::thread::spawn(move || {
@@ -560,7 +576,9 @@ impl Encoder {
                 match r.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        eb2.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+                        eb2.lock()
+                            .unwrap()
+                            .push_str(&String::from_utf8_lossy(&buf[..n]));
                     }
                 }
             }
@@ -597,9 +615,10 @@ impl Encoder {
         }
 
         let stdin = child.stdin.take();
-        let stdout = child.stdout.take().ok_or_else(|| {
-            std::io::Error::other("no ffmpeg stdout")
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("no ffmpeg stdout"))?;
 
         let packets: Arc<Mutex<VecDeque<Vec<u8>>>> = Arc::new(Mutex::new(VecDeque::new()));
         let (_, mux) = pick_fourcc_mux(&cfg.codec, &cfg.alpha_format);
@@ -674,9 +693,7 @@ impl Encoder {
 
     pub fn wait_reader(&mut self, timeout_ms: u64) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-        while !self.reader_done.load(Ordering::SeqCst)
-            && std::time::Instant::now() < deadline
-        {
+        while !self.reader_done.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         if let Some(h) = self.reader.take() {
@@ -858,7 +875,7 @@ mod tests {
         stream.extend([0x68, 3, 4]); // PPS
         stream.extend(sc4());
         stream.extend([0x65, 5, 6]); // IDR slice
-        // Next frame: SEI + P slice
+                                     // Next frame: SEI + P slice
         stream.extend(sc4());
         stream.extend([0x06, 7]); // SEI
         stream.extend(sc4());
@@ -873,11 +890,26 @@ mod tests {
         assert_eq!(out.len(), 2, "two access units after finish");
 
         let first = &out[0];
-        assert!(first.windows(2).any(|w| w == [0x67, 1]), "SPS in first packet");
-        assert!(first.windows(2).any(|w| w == [0x68, 3]), "PPS in first packet");
-        assert!(first.windows(2).any(|w| w == [0x65, 5]), "IDR in first packet");
-        assert!(out[1].windows(2).any(|w| w == [0x06, 7]), "SEI in second packet");
-        assert!(out[1].windows(2).any(|w| w == [0x41, 8]), "P slice in second packet");
+        assert!(
+            first.windows(2).any(|w| w == [0x67, 1]),
+            "SPS in first packet"
+        );
+        assert!(
+            first.windows(2).any(|w| w == [0x68, 3]),
+            "PPS in first packet"
+        );
+        assert!(
+            first.windows(2).any(|w| w == [0x65, 5]),
+            "IDR in first packet"
+        );
+        assert!(
+            out[1].windows(2).any(|w| w == [0x06, 7]),
+            "SEI in second packet"
+        );
+        assert!(
+            out[1].windows(2).any(|w| w == [0x41, 8]),
+            "P slice in second packet"
+        );
     }
 
     #[test]
@@ -952,7 +984,43 @@ mod tests {
         assert!(joined.contains("-b:v 8000000"), "args: {}", joined);
         assert!(!joined.contains("-rc cbr"), "no CBR rc: {}", joined);
         assert!(!joined.contains("-cbr 1"), "no legacy cbr flag: {}", joined);
-        assert!(!joined.contains("-x264-params"), "no x264 params: {}", joined);
+        assert!(
+            !joined.contains("-x264-params"),
+            "no x264 params: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn cbr_adds_rate_control_for_gpu_and_cpu() {
+        let mut gpu = test_cfg();
+        gpu.codec = "h264_nvenc".to_string();
+        gpu.rate_mode = "cbr".to_string();
+        gpu.bitrate = 8_000_000;
+        let args = build_args(&gpu, &test_fmt()).join(" ");
+        assert!(args.contains("-rc cbr"), "NVENC CBR: {}", args);
+        assert!(args.contains("-minrate 8000000"), "minrate: {}", args);
+        assert!(args.contains("-maxrate 8000000"), "maxrate: {}", args);
+        assert!(args.contains("-bufsize 16000000"), "bufsize: {}", args);
+
+        let mut cpu = test_cfg();
+        cpu.rate_mode = "cbr".to_string();
+        cpu.bitrate = 8_000_000;
+        let args = build_args(&cpu, &test_fmt()).join(" ");
+        assert!(args.contains("-nal-hrd cbr"), "x264 CBR: {}", args);
+        assert!(args.contains("-maxrate 8000000"), "CPU maxrate: {}", args);
+
+        let mut qsv = test_cfg();
+        qsv.codec = "h264_qsv".to_string();
+        qsv.rate_mode = "cbr".to_string();
+        qsv.bitrate = 8_000_000;
+        let args = build_args(&qsv, &test_fmt()).join(" ");
+        assert!(
+            !args.contains("-rc_mode"),
+            "QSV must stay compatible: {}",
+            args
+        );
+        assert!(args.contains("-minrate 8000000"), "QSV minrate: {}", args);
     }
 
     #[test]
@@ -973,9 +1041,17 @@ mod tests {
         let args = build_args(&c, &test_fmt());
         let joined = args.join(" ");
         assert!(joined.contains("-c:v libvpx-vp9"), "args: {}", joined);
-        assert!(joined.contains("-pix_fmt yuva420p"), "alpha pix fmt: {}", joined);
+        assert!(
+            joined.contains("-pix_fmt yuva420p"),
+            "alpha pix fmt: {}",
+            joined
+        );
         assert!(joined.contains("C:/out.webm"), "container path: {}", joined);
-        assert!(joined.contains("-f h264 pipe:1"), "avi-side stream: {}", joined);
+        assert!(
+            joined.contains("-f h264 pipe:1"),
+            "avi-side stream: {}",
+            joined
+        );
     }
 
     #[test]
@@ -987,7 +1063,11 @@ mod tests {
         let args = build_args(&c, &test_fmt());
         let joined = args.join(" ");
         assert!(joined.contains("-c:v prores_ks"), "args: {}", joined);
-        assert!(joined.contains("-profile:v 4444"), "prores 4444: {}", joined);
+        assert!(
+            joined.contains("-profile:v 4444"),
+            "prores 4444: {}",
+            joined
+        );
         assert!(joined.contains("yuva444p10le"), "alpha: {}", joined);
     }
 

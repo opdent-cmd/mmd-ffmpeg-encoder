@@ -1,6 +1,9 @@
 slint::include_modules!();
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 #[derive(Clone)]
 struct Config {
@@ -85,9 +88,7 @@ fn load_config() -> Config {
             "video" if key == "extra" => cfg.extra = value,
             "video" if key == "container" => cfg.container = value.to_ascii_lowercase(),
             "video" if key == "container_path" => cfg.container_path = value,
-            "video" if key == "alpha_format" => {
-                cfg.alpha_format = value.to_ascii_lowercase()
-            }
+            "video" if key == "alpha_format" => cfg.alpha_format = value.to_ascii_lowercase(),
             "video" if key == "delete_avi" => {
                 cfg.delete_avi = value == "1" || value.eq_ignore_ascii_case("true")
             }
@@ -262,6 +263,82 @@ fn detect_ffmpeg_path() -> String {
     "ffmpeg".to_string()
 }
 
+fn run_hidden(mut command: Command) -> Option<String> {
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Use FFmpeg's own encoder registry plus Windows adapter names. This avoids
+/// vendor SDKs and works with both Windows 10 and Windows 11 drivers.
+fn probe_hardware(ffmpeg_path: &str) -> String {
+    let encoders = run_hidden({
+        let mut c = Command::new(ffmpeg_path);
+        c.args(["-hide_banner", "-encoders"]);
+        c
+    });
+    let known = [
+        ("h264_nvenc", "NVIDIA H.264"),
+        ("hevc_nvenc", "NVIDIA HEVC"),
+        ("av1_nvenc", "NVIDIA AV1"),
+        ("h264_qsv", "Intel H.264"),
+        ("hevc_qsv", "Intel HEVC"),
+        ("av1_qsv", "Intel AV1"),
+        ("h264_amf", "AMD H.264"),
+        ("hevc_amf", "AMD HEVC"),
+        ("av1_amf", "AMD AV1"),
+    ];
+    let mut codecs = Vec::new();
+    if let Some(text) = encoders {
+        for (name, label) in known {
+            if text
+                .lines()
+                .any(|line| line.split_whitespace().any(|word| word == name))
+            {
+                codecs.push(label);
+            }
+        }
+    }
+    let gpu_names = run_hidden({
+        let mut c = Command::new("powershell.exe");
+        c.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance Win32_VideoController | Where-Object {$_.Name} | Select-Object -ExpandProperty Name",
+        ]);
+        c
+    })
+    .unwrap_or_default()
+    .lines()
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    let gpu = if gpu_names.is_empty() {
+        "GPU 适配器：未能读取（不影响 FFmpeg 探测）".to_string()
+    } else {
+        format!("GPU 适配器：{}", gpu_names.join("、"))
+    };
+    let codec = if codecs.is_empty() {
+        "可用硬件编码：未发现，将使用 CPU / 自动回退".to_string()
+    } else {
+        format!("可用硬件编码：{}", codecs.join("、"))
+    };
+    format!(
+        "{}\n{}\n探测来源：FFmpeg 编码器列表 + Windows 适配器信息",
+        gpu, codec
+    )
+}
+
 /// Compact path for the footer: "…\MMDFfmpegEncoder\FFmpegEncoder.ini".
 fn shorten_path(path: &str) -> String {
     let p = Path::new(path);
@@ -289,10 +366,11 @@ fn main() -> Result<(), slint::PlatformError> {
 
     ui.set_vendor_index(vendor_of(&cfg.codec) as i32);
     ui.set_codec_index(codec_of(&cfg.codec) as i32);
-    ui.set_rate_index(if cfg.rate_mode == "cbr" || cfg.bitrate > 0 {
-        1
-    } else {
-        0
+    ui.set_rate_index(match cfg.rate_mode.as_str() {
+        "vbr" => 1,
+        "cbr" => 2,
+        _ if cfg.bitrate > 0 => 1,
+        _ => 0,
     });
     ui.set_kbps_input(if cfg.bitrate > 0 {
         (cfg.bitrate / 1000).max(1).to_string().into()
@@ -304,10 +382,25 @@ fn main() -> Result<(), slint::PlatformError> {
     let config_full = config_file().to_string_lossy().to_string();
     ui.set_config_path(config_full.clone().into());
     ui.set_config_short(shorten_path(&config_full).into());
+    let probe_path = if cfg.ffmpeg_path == "ffmpeg" {
+        detect_ffmpeg_path()
+    } else {
+        cfg.ffmpeg_path.clone()
+    };
+    ui.set_hardware_status(probe_hardware(&probe_path).into());
+
+    let weak_probe = ui.as_weak();
+    ui.on_refresh_hardware(move || {
+        if let Some(ui) = weak_probe.upgrade() {
+            let path = detect_ffmpeg_path();
+            ui.set_hardware_status(probe_hardware(&path).into());
+        }
+    });
 
     let weak = ui.as_weak();
     ui.on_save_requested(move || {
         let ui = weak.unwrap();
+        let old = load_config();
         let vendor = ui.get_vendor_index().max(0) as usize;
         let codec = ui.get_codec_index().max(0) as usize;
         let rate = ui.get_rate_index().max(0) as usize;
@@ -340,35 +433,36 @@ fn main() -> Result<(), slint::PlatformError> {
         };
         let rate_mode = if alpha != 0 {
             "crf".to_string()
-        } else if rate == 1 {
-            "vbr".to_string()
         } else {
-            "crf".to_string()
+            match rate {
+                1 => "vbr".to_string(),
+                2 => "cbr".to_string(),
+                _ => "crf".to_string(),
+            }
         };
         let mut cfg = Config {
             ffmpeg_path: detect_ffmpeg_path(),
             codec: codec_str.clone(),
             preset: preset_for(&codec_str).to_string(),
-            crf: 18,
+            crf: old.crf.clamp(0, 51),
             bitrate: if alpha != 0 {
                 0
-            } else if rate == 1 {
+            } else if rate == 1 || rate == 2 {
                 kbps * 1000
             } else {
                 0
             },
             rate_mode,
-            extra: String::new(),
+            extra: old.extra.clone(),
             container: out_container,
             container_path: String::new(),
             alpha_format: alpha_str(alpha).to_string(),
-            debug: false,
+            debug: old.debug,
             delete_avi: !(alpha == 0 && container == 2),
             merge_audio: !(alpha == 0 && container == 2),
         };
         if cfg.ffmpeg_path == "ffmpeg" {
             // Keep whatever path was configured before if we can't detect one.
-            let old = load_config();
             cfg.ffmpeg_path = old.ffmpeg_path;
         }
         match save_config(&cfg) {

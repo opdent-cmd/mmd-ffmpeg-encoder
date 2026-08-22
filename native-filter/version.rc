@@ -19,11 +19,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "MMD FFmpeg Encoder Project\0"
             VALUE "FileDescription", "Native DirectShow FFmpeg Video Encoder\0"
-            VALUE "FileVersion", "1.1.9\0"
+            VALUE "FileVersion", "1.2.0\0"
             VALUE "InternalName", "FFmpegVideoEncoder.dll\0"
             VALUE "OriginalFilename", "FFmpegVideoEncoder.dll\0"
             VALUE "ProductName", "MMD FFmpeg Encoder\0"
-            VALUE "ProductVersion", "1.1.9\0"
+            VALUE "ProductVersion", "1.2.0\0"
         END
     END
     BLOCK "VarFileInfo"

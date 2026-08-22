@@ -15,7 +15,10 @@
 - 默认使用兼容性最高的 CPU 编码；也可手动指定 NVIDIA NVENC / Intel
   QSV / AMD AMF，启动前会预检，编码器或驱动不可用时回退 CPU
 - 格式：H.264 / HEVC / AV1（不支持的硬件组合自动回退 CPU）
-- 码率模式：质量优先（CRF）/ 动态码率（VBR），kbps 自填
+- 码率模式：质量优先（CRF）/ 动态码率（VBR）/ 恒定码率（CBR），kbps 自填；
+  CBR 会同时设置目标、最小、最大码率和缓冲区，适合恒定高码率交付视频
+- 配置界面会列出 Windows 当前 GPU 适配器和 bundled FFmpeg 中注册的
+  NVENC/QSV/AMF 编码器，可手动指定硬件；运行时打开失败会自动回退 CPU
 - 输出：MP4（默认）/ MKV / 传统 AVI，渲染成功后自动清理临时 AVI
 - 透明输出：WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1 无损)，
   保留 MMD 帧里的 Alpha 通道；透明格式统一走 CPU 编码
@@ -33,7 +36,7 @@
 
 ## 崩溃与参与修复
 
-`quartz.dll` 是 Windows 自带的 DirectShow 运行时。从 1.1.9 兼容版开始，
+`quartz.dll` 是 Windows 自带的 DirectShow 运行时。从 1.2.0 兼容版开始，
 COM 生命周期、引脚、媒体类型和分配器统一交给微软原生 BaseClasses，
 不再使用 Rust 自动生成的 COM thunk，专门移除了 1.1.7/1.1.8 在 Win10 上
 触发的 `OutputPin::ConnectedTo` 崩溃路径。提 issue 时请附上：

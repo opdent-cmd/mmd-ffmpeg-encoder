@@ -19,8 +19,12 @@ Slint configuration UI is unchanged.
   the selected encoder or driver cannot start.
 - Formats: H.264 / HEVC / AV1 (unsupported hardware combinations
   automatically fall back to CPU).
-- Bitrate modes: quality-first (CRF) / variable bitrate (VBR), with a
-  user-defined kbps value.
+- Bitrate modes: quality-first (CRF) / variable bitrate (VBR) / constant
+  bitrate (CBR), with a user-defined kbps value. CBR sets target, minimum,
+  maximum and buffer size for stable high-bitrate delivery.
+- The configuration UI lists Windows GPU adapters and hardware encoders
+  registered by the bundled FFmpeg build (NVENC/QSV/AMF), while still allowing
+  an explicit hardware choice; runtime preflight falls back to CPU if needed.
 - Output: MP4 (default) / MKV / legacy AVI; the temporary AVI is removed
   after a successful render.
 - Transparent output: WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1 lossless)
@@ -43,7 +47,7 @@ Slint configuration UI is unchanged.
 ## Crashes & Contributing Fixes
 
 `quartz.dll` is a Windows system component (the DirectShow runtime). Starting
-with the 1.1.9 compatibility implementation, COM lifetime, pins, media types,
+with the 1.2.0 compatibility implementation, COM lifetime, pins, media types,
 and allocators are handled by Microsoft's native DirectShow BaseClasses rather
 than generated Rust COM thunks. This specifically removes the Win10
 `OutputPin::ConnectedTo` crash path reported against 1.1.7 and 1.1.8.

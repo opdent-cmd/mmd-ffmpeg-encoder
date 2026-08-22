@@ -190,10 +190,16 @@ pub fn load() -> Config {
             "crf".to_string()
         };
     }
-    // CBR was removed (NVENC HEVC could not reliably pin the target on all
-    // GPUs); old configurations degrade to VBR instead of being ignored.
-    if cfg.rate_mode.eq_ignore_ascii_case("cbr") {
-        cfg.rate_mode = "vbr".to_string();
-    }
+    // Keep the three supported rate-control modes explicit. Unknown values
+    // are treated as CRF so a hand-edited INI cannot produce ambiguous
+    // encoder arguments. CBR is intentionally preserved for high-bitrate
+    // delivery masters.
+    cfg.rate_mode = match cfg.rate_mode.trim().to_ascii_lowercase().as_str() {
+        "vbr" => "vbr".to_string(),
+        "cbr" => "cbr".to_string(),
+        _ => "crf".to_string(),
+    };
+    cfg.bitrate = cfg.bitrate.clamp(0, 400_000_000);
+    cfg.crf = cfg.crf.clamp(0, 51);
     cfg
 }
