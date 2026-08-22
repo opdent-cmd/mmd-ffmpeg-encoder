@@ -910,8 +910,11 @@ void CFFmpegEncoder::SelectPortableCodec()
     if (m_codec.find(L"qsv") != std::wstring::npos) {
         probe += L" -init_hw_device qsv=hw -filter_hw_device hw";
     }
-    probe += L" -f lavfi -i color=black:s=160x120:r=30:d=0.1 -frames:v 1 -c:v ";
-    probe += m_codec;
+    probe += L" -f lavfi -i color=black:s=160x120:r=30:d=0.1 -frames:v 1";
+    // Probe the exact hardware rate-control path used by the real render.
+    // A minimal '-c:v h264_nvenc' probe can pass while CBR/HRD options fail
+    // on an older driver, which used to leave MMD with a dead child process.
+    AppendCodecArgs(probe, m_codec, m_preset, false);
     probe += L" -f null -";
     if (RunCommand(probe, 20000)) {
         return;
