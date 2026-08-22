@@ -328,6 +328,26 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
                 a.push(cfg.bitrate.to_string());
                 a.push("-bufsize".into());
                 a.push(bufsize.to_string());
+                if nvenc {
+                    // NVENC otherwise keeps a large VBV undershoot on flat
+                    // scenes. Strict GOP + the explicit CBR flag make the
+                    // hardware insert filler and hold the target bitrate.
+                    a.push("-cbr".into());
+                    a.push("1".into());
+                    a.push("-strict_gop".into());
+                    a.push("1".into());
+                } else if amf {
+                    // AMF exposes HRD and filler controls separately.
+                    a.push("-enforce_hrd".into());
+                    a.push("1".into());
+                    a.push("-filler_data".into());
+                    a.push("1".into());
+                } else if qsv {
+                    // QSV's low-delay BRC is the cross-version switch that
+                    // prevents the bitrate controller from undershooting.
+                    a.push("-low_delay_brc".into());
+                    a.push("1".into());
+                }
             }
         } else if nvenc {
             a.push("-qp".into());
@@ -355,8 +375,19 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
             // own x265-params syntax, so do not pass this H.264-only option
             // to HEVC encoders.
             if cfg.codec.contains("264") {
-                a.push("-nal-hrd".into());
-                a.push("cbr".into());
+                // x264 needs filler NAL units to keep a flat scene at the
+                // requested rate. The generic nal-hrd option alone only
+                // constrains the VBV and permits undershoot.
+                a.push("-x264-params".into());
+                a.push("nal-hrd=cbr:filler=1".into());
+            } else if cfg.codec.contains("265") {
+                let kbps = cfg.bitrate / 1000;
+                let buf_kbps = bufsize / 1000;
+                a.push("-x265-params".into());
+                a.push(format!(
+                    "bitrate={}:vbv-maxrate={}:vbv-bufsize={}",
+                    kbps, kbps, buf_kbps
+                ));
             }
         }
     } else if cfg.crf > 0 {
@@ -1007,7 +1038,11 @@ mod tests {
         cpu.rate_mode = "cbr".to_string();
         cpu.bitrate = 8_000_000;
         let args = build_args(&cpu, &test_fmt()).join(" ");
-        assert!(args.contains("-nal-hrd cbr"), "x264 CBR: {}", args);
+        assert!(
+            args.contains("-x264-params nal-hrd=cbr:filler=1"),
+            "x264 CBR filler: {}",
+            args
+        );
         assert!(args.contains("-maxrate 8000000"), "CPU maxrate: {}", args);
 
         let mut qsv = test_cfg();
@@ -1021,6 +1056,19 @@ mod tests {
             args
         );
         assert!(args.contains("-minrate 8000000"), "QSV minrate: {}", args);
+        assert!(
+            args.contains("-low_delay_brc 1"),
+            "QSV strict BRC: {}",
+            args
+        );
+
+        let mut amf = test_cfg();
+        amf.codec = "h264_amf".to_string();
+        amf.rate_mode = "cbr".to_string();
+        amf.bitrate = 8_000_000;
+        let args = build_args(&amf, &test_fmt()).join(" ");
+        assert!(args.contains("-enforce_hrd 1"), "AMF HRD: {}", args);
+        assert!(args.contains("-filler_data 1"), "AMF filler: {}", args);
     }
 
     #[test]

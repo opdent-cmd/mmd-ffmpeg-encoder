@@ -94,6 +94,7 @@ private:
     std::wstring m_extraPath;
     int     m_crf = 18;
     long    m_bitrate = 0;
+    bool    m_cbr = false;
     bool    m_deleteAvi = true;
     bool    m_mergeAudio = true;
     bool    m_completed = false;

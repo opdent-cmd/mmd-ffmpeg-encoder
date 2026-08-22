@@ -427,6 +427,9 @@ HRESULT CFFmpegEncoder::ReadConfig()
     m_bitrate = GetPrivateProfileIntW(L"video", L"bitrate", 0, ini.c_str());
     m_crf = max(0, min(m_crf, 51));
     m_bitrate = max(0L, m_bitrate);
+    GetPrivateProfileStringW(L"video", L"rate_mode", L"crf", buf,
+                             ARRAYSIZE(buf), ini.c_str());
+    m_cbr = Lower(Trim(buf)) == L"cbr" && m_bitrate > 0;
     m_deleteAvi = GetPrivateProfileIntW(L"video", L"delete_avi", 1,
                                         ini.c_str()) != 0;
     m_mergeAudio = GetPrivateProfileIntW(L"video", L"merge_audio", 1,
@@ -639,6 +642,7 @@ void CFFmpegEncoder::AppendCodecArgs(std::wstring& cmd,
     const bool qsv = codec.find(L"qsv") != std::wstring::npos;
     const bool amf = codec.find(L"amf") != std::wstring::npos;
     const bool gpu = nvenc || qsv || amf;
+    const bool cbr = m_cbr && m_bitrate > 0;
     const bool lossless = codec.find(L"ffv1") != std::wstring::npos ||
                           codec.find(L"utvideo") != std::wstring::npos ||
                           codec.find(L"huffyuv") != std::wstring::npos ||
@@ -661,6 +665,18 @@ void CFFmpegEncoder::AppendCodecArgs(std::wstring& cmd,
         if (m_bitrate > 0) {
             swprintf_s(numBuf, L" -b:v %ld", m_bitrate);
             cmd += numBuf;
+            if (cbr) {
+                swprintf_s(numBuf, L" -minrate %ld -maxrate %ld -bufsize %ld",
+                           m_bitrate, m_bitrate, m_bitrate * 2L);
+                cmd += numBuf;
+                if (nvenc) {
+                    cmd += L" -rc cbr -cbr 1 -strict_gop 1";
+                } else if (amf) {
+                    cmd += L" -rc cbr -enforce_hrd 1 -filler_data 1";
+                } else if (qsv) {
+                    cmd += L" -low_delay_brc 1";
+                }
+            }
         } else if (qsv) {
             cmd += L" -global_quality 23";
         } else if (amf) {
@@ -671,6 +687,21 @@ void CFFmpegEncoder::AppendCodecArgs(std::wstring& cmd,
     } else if (m_bitrate > 0) {
         swprintf_s(numBuf, L" -b:v %ld", m_bitrate);
         cmd += numBuf;
+        if (cbr) {
+            swprintf_s(numBuf, L" -minrate %ld -maxrate %ld -bufsize %ld",
+                       m_bitrate, m_bitrate, m_bitrate * 2L);
+            cmd += numBuf;
+            if (codec.find(L"264") != std::wstring::npos) {
+                cmd += L" -x264-params nal-hrd=cbr:filler=1";
+            } else if (codec.find(L"265") != std::wstring::npos ||
+                       codec.find(L"hevc") != std::wstring::npos) {
+                const long kbps = m_bitrate / 1000L;
+                const long bufKbps = (m_bitrate * 2L) / 1000L;
+                cmd += L" -x265-params bitrate=" + std::to_wstring(kbps) +
+                       L":vbv-maxrate=" + std::to_wstring(kbps) +
+                       L":vbv-bufsize=" + std::to_wstring(bufKbps);
+            }
+        }
     } else if (m_crf > 0 && !lossless) {
         swprintf_s(numBuf, L" -crf %d", m_crf);
         cmd += numBuf;
