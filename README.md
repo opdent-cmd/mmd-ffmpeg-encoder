@@ -1,174 +1,132 @@
 # MMD FFmpeg Encoder
 
-> [中文版](README.zh-CN.md)
+> [简体中文](README.zh-CN.md)
 
-Let MikuMikuDance (x64) use modern encoders (H.264 / HEVC / AV1) for its AVI
-output, automatically produce a **single MP4/MKV with audio**, support
-alpha-channel WebM / MOV / MKV, and clean up the temporary AVI after
-rendering.
+A x64 DirectShow video encoder for MikuMikuDance. It sends MMD's RGB frames to
+an isolated `ffmpeg.exe` process and can encode H.264, HEVC, or AV1 into MP4,
+MKV, or AVI. The filter does not load FFmpeg codec libraries inside MMD.
 
-The compatibility implementation is a native x64 C++ DirectShow filter built
-on Microsoft's reference BaseClasses. MMD only loads this small COM/filter
-shell; all codec work stays in a separate `ffmpeg.exe` process. The Rust +
-Slint configuration UI is unchanged.
+## Use
 
-## Features
+1. Run `dist/MMDFfmpegEncoder-Setup.exe`. The installer registers the x64
+   DirectShow encoder and installs the settings utility and FFmpeg.
+2. Open **MMD FFmpeg Encoder Settings** and choose the encoder, video codec,
+   rate-control mode, and output container.
+3. In MMD, open **File → Render to AVI File**, select
+   **FFmpeg Video Encoder (H.264/HEVC/AV1)** as the compressor, and render.
+4. To include audio, select a WAV track in MMD's AVI output settings. After
+   rendering, the filter attempts to merge audio into the configured output
+   and remove the temporary AVI.
 
-- Portable CPU encoding is the default. NVIDIA NVENC / Intel QSV / AMD AMF
-  remain explicit options and are preflight-tested, with CPU fallback when
-  the selected encoder or driver cannot start.
-- Formats: H.264 / HEVC / AV1 (unsupported hardware combinations
-  automatically fall back to CPU).
-- Bitrate modes: quality-first (CRF) / variable bitrate (VBR) / constant
-  bitrate (CBR), with a user-defined kbps value. CBR sets target, minimum,
-  maximum and buffer size for stable high-bitrate delivery.
-- The configuration UI lists Windows GPU adapters and hardware encoders
-  registered by the bundled FFmpeg build (NVENC/QSV/AMF), while still allowing
-  an explicit hardware choice; runtime preflight falls back to CPU if needed.
-- The settings UI and installer follow the system language: Simplified Chinese
-  for Chinese locales, English everywhere else.
-- Output: MP4 (default) / MKV / legacy AVI; the temporary AVI is removed
-  after a successful render.
-- Transparent output: WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1 lossless)
-  preserving the alpha channel from MMD frames; transparent formats always
-  use CPU encoding.
-- The audio track in MMD's AVI is merged into the MP4/MKV losslessly (AAC).
-- Re-rendering to the same filename overwrites automatically.
-- FFmpeg diagnostics are written to the system temp folder for issue reports.
-- Graphical configuration UI (Rust + Slint).
-- Windows installer (NSIS, ~27 MB, bundles ffmpeg 7.1).
-- Automatic CPU fallback when the GPU encoder is incompatible with the
-  installed driver; no hangs, no crashes from that path.
+The default is MP4, H.264, CPU encoding, and CRF quality mode. Hardware
+encoding requires a compatible GPU, driver, and FFmpeg encoder. If the startup
+preflight fails, the filter falls back to the corresponding CPU encoder.
 
-> Transparency note: VP9 WebM marks the alpha plane with `alpha_mode=1`;
-> some tools (including ffprobe) will report `yuv420p`, which is a known
-> quirk — players that support WebM alpha (Chrome, OBS, etc.) show the
-> transparency correctly. AV1 alpha requires encoder support; the bundled
-> libaom does not support it, so "WebM AV1 transparent" is not offered.
+## Rate Control
 
-## Crashes & Contributing Fixes
+The bitrate field is in kbps and applies to the video stream, not audio or
+container overhead. Measured average bitrate varies with clip duration, scene
+complexity, and encoder latency; rate control does not guarantee a file size.
 
-`quartz.dll` is a Windows system component (the DirectShow runtime). Starting
-with the 1.2.0 compatibility implementation, COM lifetime, pins, media types,
-and allocators are handled by Microsoft's native DirectShow BaseClasses rather
-than generated Rust COM thunks. This specifically removes the Win10
-`OutputPin::ConnectedTo` crash path reported against 1.1.7 and 1.1.8.
-When filing an issue, please attach:
+| Mode | Current behavior | Use when |
+|---|---|---|
+| CRF | Prioritizes quality without a target bitrate; default CRF is 18 | Bandwidth and file size are not fixed requirements |
+| VBR | Uses the entered value as the average target, with a peak limit of 1.5× target and a VBV buffer of 2× target | Average rate matters, but complex scenes may use more bits |
+| CBR | Sets target, minimum, and maximum to the same value, with a VBV buffer of 2× target; enables encoder HRD/filler controls where supported | A steadier delivery or transport rate is required |
 
-- `%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder_debug.log`
-- a Windows Error Reporting dump, if one was generated
-- Windows build number (`winver`) and the file version of
-  `C:\Windows\System32\quartz.dll`
+The encoder determines how closely those constraints are met. NVENC uses an
+explicit rate-control mode; AMF VBR uses peak-constrained VBR; QSV derives its
+mode from the target and peak rates. The CPU H.264/HEVC paths configure VBV;
+H.264 uses filler NAL units, while HEVC uses x265 HRD and strict-CBR options.
+Filler behavior and rate variation differ by encoder, GPU, driver, and
+version. CBR therefore does not promise an exact rate in every short interval
+or an exact final file size. Total file bitrate also includes audio and
+container overhead.
 
-If you are able to debug it yourself, the best way to help is to **fork this
-repository, attempt a fix, and open a Pull Request** — no single developer
-can test every Windows / quartz.dll combination, so community fixes are the
-fastest path to making the encoder stable for everyone.
+Choose VBR to cap peaks. To reduce file size, lower the VBR target rather than
+using CBR as a file-size limit. Alpha output uses a separate CPU encoding path
+and does not use these VBR/CBR settings.
 
-## Project Structure
+## Encoders and Output
 
-```
-├── native-filter/ Native C++ DirectShow filter (release implementation)
-│   ├── src/       BaseClasses transform filter + ffmpeg child process
-│   ├── tests/     registration-free COM ABI stress test
-│   └── third_party/ Microsoft DirectShow BaseClasses
-├── filter/       Legacy Rust filter retained as a diagnostic fallback
-├── ui/           Slint config UI (Rust binary)
-│   ├── src/      ini read/write, encoder mapping
-│   └── ui/       UI definition (main.slint)
-├── installer/    NSIS installer script
-├── Cargo.toml    workspace
-└── LICENSE       GPL-3.0
+The repository maintains two FFmpeg-major release lines: `main` bundles FFmpeg
+9 for current hardware, while `ffmpeg-7` bundles FFmpeg 7.1 for devices that
+still require older NVENC/QSV/AMF support. Both lines share the filter, settings
+UI, and VBR/CBR fixes, but keep version-specific hardware encoder arguments in
+their respective branches. Do not move FFmpeg-specific options between the
+branches without checking that build's encoder help.
+
+- Video codecs: H.264, HEVC, and AV1; CPU, NVIDIA NVENC, Intel QSV, or AMD AMF.
+- Containers: MP4, MKV, or MMD AVI only.
+- Alpha output: WebM/VP9, MOV/ProRes 4444, or MKV/FFV1. Alpha modes use CPU
+  encoding.
+- The settings utility detects FFmpeg encoders and Windows GPU adapters. A
+  listed encoder may still fail to initialize with a particular rate mode or
+  driver; the filter preflights the selected parameters before rendering.
+- `main` bundles gyan.dev's static GPL essentials FFmpeg
+  `2026-10-19-git-2344518cc5` (FFmpeg 9). The compatible FFmpeg 7.1 installer
+  is built separately from `ffmpeg-7`. Choose the FFmpeg 9 or FFmpeg 7
+  installer to match the GPU generation.
+
+## Troubleshooting
+
+FFmpeg process logs are written to:
+
+```text
+%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder_debug.log
 ```
 
-## Build
+Include the log, Windows version, selected encoder/rate mode/bitrate, and
+reproduction steps when reporting an issue. If the rendered video is missing
+several seconds at the beginning, temporarily set the following in
+`FFmpegEncoder.ini` beside the installed filter:
 
-Requires Rust (stable), Visual Studio 2022 Build Tools with C++, and a Windows
-10/11 SDK.
+```ini
+[video]
+delete_avi=0
+merge_audio=0
+```
+
+Render again and compare the retained AVI with the encoded output. If both
+files miss the same frames, investigate MMD's frame input and the shared
+encoding path. If only the AVI is affected, inspect AVI Mux; if only the
+configured output is affected, inspect parallel muxing and audio post-processing.
+Check that any sample shared for diagnosis contains no private or sensitive
+footage. Restore the settings after testing.
+
+## Build from Source
+
+Requirements: Windows 10/11 x64, Rust stable, Visual Studio 2022 C++ Build
+Tools, Windows SDK, NSIS 3.x, and an FFmpeg build at `bin/ffmpeg.exe`.
 
 ```powershell
-# Native x64 DirectShow DLL + ABI smoke test
 native-filter\build.cmd
+native-filter\build\rate_control_args.exe
 native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
-
-# Rust/Slint config UI
+cargo test -p ffmpeg_encoder
 cargo build --release -p mmd_encoder_config
-
-# Outputs
-# native-filter/build/FFmpegVideoEncoder.dll  DirectShow filter
-# target/release/mmd_encoder_config.exe    config UI
+New-Item -ItemType Directory -Force dist | Out-Null
+$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg9.exe'
+& "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" installer\install.nsi
 ```
 
-Register the filter (requires administrator):
+The installer is written to `dist/MMDFfmpegEncoder-Setup.exe`. The filter and
+settings utility can be built independently; distribute an installer only
+after checking its contents. Installation requires administrator privileges
+to register the DirectShow filter.
 
-```powershell
-regsvr32 "native-filter\build\FFmpegVideoEncoder.dll"
-```
+## Repository Layout
 
-Build the installer (requires NSIS 3.x):
-
-```powershell
-makensis installer\install.nsi
-```
-
-## Configuration
-
-After installation, open `MMDEncoderConfig.exe`:
-
-- Hardware: Auto (recommended) / NVIDIA (NVENC) / Intel (QSV) / AMD (AMF) /
-  CPU only
-- Codec: H.264 / HEVC / AV1
-- Bitrate: quality-first (CRF) / variable bitrate (VBR), kbps user-defined
-- Output: MP4 (recommended) / MKV / AVI (legacy)
-- Transparent output: Off / WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1)
-
-The config file `FFmpegEncoder.ini` lives next to the program and is removed
-together with the app on uninstall.
-
-## Using with MMD
-
-1. Open MMD → File → Render to AVI File
-2. Pick **FFmpeg Video Encoder (H.264/HEVC/AV1)** as the video compressor
-3. If you need sound, specify the music WAV in MMD's AVI output settings
-4. For transparency, choose a transparent output in the config UI and make
-   sure MMD's output actually contains an alpha channel
-5. After rendering, the output folder contains only
-   `same-name.mp4/.webm/.mov/.mkv` (with audio)
-
-## How It Works
-
-```
-MMD rendered frames → MMDxShow → SampleGrabber → this filter → AVI Mux → MMD writes .avi
-                                        │
-                                        ├─ ffmpeg encodes (NVENC/QSV/AMF/CPU)
-                                        ├─ muxes .mp4/.mkv at the same time
-                                        │  (transparent mode writes .webm/.mov/.mkv)
-                                        └─ after render: merge audio + delete .avi
-```
-
-Microsoft's native DirectShow BaseClasses implement COM lifetime, `IBaseFilter`,
-pins, media negotiation, and allocators. Project code validates MMD's RGB media
-types, streams frames to the out-of-process ffmpeg encoder, and splits Annex B
-packets for AVI Mux. No FFmpeg codec DLL is loaded into MMD.
+- `native-filter/`: release C++ DirectShow filter, ABI checks, and rate-control tests.
+- `filter/`: retained Rust encoder implementation and rate-control tests.
+- `ui/`: Rust + Slint settings utility.
+- `installer/`: NSIS installer script.
+- `bin/ffmpeg.exe`: local FFmpeg packaging input; executable files are ignored by Git.
 
 ## License
 
-This project is released under **GPL-3.0** (see [LICENSE](LICENSE)).
-
-- The filter and config UI are original project code; the native filter uses
-  Microsoft's MIT-licensed Windows Classic Samples DirectShow BaseClasses.
-- Dependencies: `windows` / `windows-core` (MIT/Apache-2.0), `slint`
-  (GPL-3.0 or commercial), ffmpeg (GPL build).
-- Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-- The bundled ffmpeg (GPL build) source is available from
-  <https://ffmpeg.org/download.html>; Slint GPL source is at
-  <https://github.com/slint-ui/slint>.
-- The installer ships the GPL-3.0 license page and includes `LICENSE` and
-  `THIRD_PARTY_NOTICES.md` in the install directory.
-
-## Acknowledgements
-
-- [ffmpeg](https://ffmpeg.org/)
-- [Slint](https://slint.dev/)
-- [NSIS](https://nsis.sourceforge.io/)
-- The MikuMikuDance community
+This project is licensed under GPL-3.0. FFmpeg is a GPL build; its version,
+source revision, checksum, and third-party notices are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The installer includes the
+project's GPL license text. The DirectShow BaseClasses license is in
+[`native-filter/third_party/WINDOWS_CLASSIC_SAMPLES_LICENSE`](native-filter/third_party/WINDOWS_CLASSIC_SAMPLES_LICENSE).

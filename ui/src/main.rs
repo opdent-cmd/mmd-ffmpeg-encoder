@@ -115,7 +115,7 @@ fn save_config(cfg: &Config) -> std::io::Result<()> {
          preset={}\n\
          crf={}\n\
          bitrate={}\n\
-         ; crf = quality-first, vbr = dynamic bitrate\n\
+         ; crf = quality, vbr = average target with peak cap, cbr = constant target\n\
          rate_mode={}\n\
          extra={}\n\
          ; mp4 / mkv / mov / empty=AVI only\n\

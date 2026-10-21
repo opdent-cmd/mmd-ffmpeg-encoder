@@ -308,7 +308,12 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
     }
     let have_bitrate = cfg.bitrate > 0;
     let cbr = cfg.rate_mode.eq_ignore_ascii_case("cbr") && have_bitrate;
-    let bufsize = cfg.bitrate.saturating_mul(2).max(cfg.bitrate);
+    let bufsize = cfg.bitrate.saturating_mul(2);
+    let maxrate = if cbr {
+        cfg.bitrate
+    } else {
+        cfg.bitrate.saturating_add(cfg.bitrate / 2)
+    };
     if gpu {
         if have_bitrate {
             if cbr {
@@ -319,24 +324,28 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
                     a.push("-rc".into());
                     a.push("cbr".into());
                 }
+            } else if nvenc {
+                a.push("-rc".into());
+                a.push("vbr".into());
+            } else if amf {
+                a.push("-rc".into());
+                a.push("vbr_peak".into());
             }
             a.push("-b:v".into());
             a.push(cfg.bitrate.to_string());
+            a.push("-maxrate".into());
+            a.push(maxrate.to_string());
+            a.push("-bufsize".into());
+            a.push(bufsize.to_string());
             if cbr {
                 a.push("-minrate".into());
                 a.push(cfg.bitrate.to_string());
-                a.push("-maxrate".into());
-                a.push(cfg.bitrate.to_string());
-                a.push("-bufsize".into());
-                a.push(bufsize.to_string());
                 if nvenc {
                     // Strict GOP keeps the controller stable. Newer FFmpeg
                     // builds additionally expose cbr_padding, which inserts
                     // filler NAL units on flat scenes and is required for a
                     // true constant transport bitrate. Older builds simply
                     // omit it because they reject the option.
-                    a.push("-cbr".into());
-                    a.push("1".into());
                     a.push("-strict_gop".into());
                     a.push("1".into());
                     if nvenc_cbr_padding_supported(cfg) {
@@ -371,13 +380,13 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
     } else if have_bitrate {
         a.push("-b:v".into());
         a.push(cfg.bitrate.to_string());
+        a.push("-maxrate".into());
+        a.push(maxrate.to_string());
+        a.push("-bufsize".into());
+        a.push(bufsize.to_string());
         if cbr {
             a.push("-minrate".into());
             a.push(cfg.bitrate.to_string());
-            a.push("-maxrate".into());
-            a.push(cfg.bitrate.to_string());
-            a.push("-bufsize".into());
-            a.push(bufsize.to_string());
             // libx264 exposes the generic nal-hrd switch. libx265 uses its
             // own x265-params syntax, so do not pass this H.264-only option
             // to HEVC encoders.
@@ -387,13 +396,22 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
                 // constrains the VBV and permits undershoot.
                 a.push("-x264-params".into());
                 a.push("nal-hrd=cbr:filler=1".into());
-            } else if cfg.codec.contains("265") {
-                let kbps = cfg.bitrate / 1000;
-                let buf_kbps = bufsize / 1000;
-                a.push("-x265-params".into());
+            }
+        }
+        if !gpu && (cfg.codec.contains("265") || cfg.codec.contains("hevc")) {
+            let kbps = cfg.bitrate / 1000;
+            let max_kbps = maxrate / 1000;
+            let buf_kbps = bufsize / 1000;
+            a.push("-x265-params".into());
+            if cbr {
+                a.push(format!(
+                    "bitrate={}:vbv-maxrate={}:vbv-bufsize={}:hrd=1:strict-cbr=1",
+                    kbps, max_kbps, buf_kbps
+                ));
+            } else {
                 a.push(format!(
                     "bitrate={}:vbv-maxrate={}:vbv-bufsize={}",
-                    kbps, kbps, buf_kbps
+                    kbps, max_kbps, buf_kbps
                 ));
             }
         }
@@ -1042,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn vbr_nvenc_uses_plain_bitrate() {
+    fn vbr_nvenc_uses_bounded_peak_rate() {
         let mut c = test_cfg();
         c.codec = "h264_nvenc".to_string();
         c.rate_mode = "vbr".to_string();
@@ -1052,6 +1070,9 @@ mod tests {
         let args = build_args(&c, &test_fmt());
         let joined = args.join(" ");
         assert!(joined.contains("-b:v 8000000"), "args: {}", joined);
+        assert!(joined.contains("-maxrate 12000000"), "args: {}", joined);
+        assert!(joined.contains("-bufsize 16000000"), "args: {}", joined);
+        assert!(joined.contains("-rc vbr"), "NVENC VBR mode: {}", joined);
         assert!(!joined.contains("-rc cbr"), "no CBR rc: {}", joined);
         assert!(!joined.contains("-cbr 1"), "no legacy cbr flag: {}", joined);
         assert!(
@@ -1062,6 +1083,18 @@ mod tests {
     }
 
     #[test]
+    fn amf_vbr_uses_peak_constrained_mode() {
+        let mut c = test_cfg();
+        c.codec = "h264_amf".to_string();
+        c.rate_mode = "vbr".to_string();
+        c.bitrate = 8_000_000;
+        let args = build_args(&c, &test_fmt()).join(" ");
+        assert!(args.contains("-rc vbr_peak"), "AMF VBR mode: {}", args);
+        assert!(args.contains("-maxrate 12000000"), "peak cap: {}", args);
+        assert!(!args.contains("-low_delay_brc"), "no CBR flag: {}", args);
+    }
+
+    #[test]
     fn cbr_adds_rate_control_for_gpu_and_cpu() {
         let mut gpu = test_cfg();
         gpu.codec = "h264_nvenc".to_string();
@@ -1069,6 +1102,7 @@ mod tests {
         gpu.bitrate = 8_000_000;
         let args = build_args(&gpu, &test_fmt()).join(" ");
         assert!(args.contains("-rc cbr"), "NVENC CBR: {}", args);
+        assert!(!args.contains("-cbr 1"), "avoid removed FFmpeg option: {}", args);
         assert!(args.contains("-minrate 8000000"), "minrate: {}", args);
         assert!(args.contains("-maxrate 8000000"), "maxrate: {}", args);
         assert!(args.contains("-bufsize 16000000"), "bufsize: {}", args);
@@ -1108,6 +1142,18 @@ mod tests {
         let args = build_args(&amf, &test_fmt()).join(" ");
         assert!(args.contains("-enforce_hrd 1"), "AMF HRD: {}", args);
         assert!(args.contains("-filler_data 1"), "AMF filler: {}", args);
+    }
+
+    #[test]
+    fn x265_cbr_uses_supported_strict_rate_control_options() {
+        let mut c = test_cfg();
+        c.codec = "libx265".to_string();
+        c.rate_mode = "cbr".to_string();
+        c.bitrate = 8_000_000;
+        let args = build_args(&c, &test_fmt()).join(" ");
+        assert!(args.contains("-maxrate 8000000"), "CBR maxrate: {}", args);
+        assert!(args.contains("hrd=1:strict-cbr=1"), "x265 CBR flags: {}", args);
+        assert!(!args.contains("nal-hrd"), "avoid unsupported x265 option: {}", args);
     }
 
     #[test]

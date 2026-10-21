@@ -88,7 +88,7 @@ export component MainWindow inherits Window {
                 ComboBox {
                     current-index <=> root.rate-index;
                     enabled: root.alpha-index == 0;
-                    model: root.chinese ? ["自动（质量优先，CRF）", "动态码率 (VBR)", "恒定码率 (CBR)"] : ["Auto (quality / CRF)", "Variable bitrate (VBR)", "Constant bitrate (CBR)"];
+                    model: root.chinese ? ["自动（画质优先，CRF）", "VBR（平均目标）", "CBR（目标码率）"] : ["Auto (quality / CRF)", "VBR (average target)", "CBR (target rate)"];
                 }
             }
             Row {

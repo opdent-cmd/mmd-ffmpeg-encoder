@@ -1,4 +1,5 @@
 #include "ffmpeg_encoder.h"
+#include "rate_control.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -94,6 +95,39 @@ namespace {
             return _wcsicmp(left.c_str(), right.c_str()) == 0;
         }
         return _wcsicmp(leftBuf, rightBuf) == 0;
+    }
+
+    void AppendDebugLog(const std::wstring& line)
+    {
+        WCHAR tempDir[32768] = {};
+        const DWORD tempLen = GetTempPathW(ARRAYSIZE(tempDir), tempDir);
+        if (tempLen == 0 || tempLen >= ARRAYSIZE(tempDir)) {
+            return;
+        }
+        std::wstring logPath(tempDir, tempLen);
+        logPath += L"MMDFfmpegEncoder";
+        CreateDirectoryW(logPath.c_str(), NULL);
+        logPath += L"\\ffmpeg_encoder_debug.log";
+        HANDLE file = CreateFileW(logPath.c_str(), FILE_APPEND_DATA,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                  OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (file == INVALID_HANDLE_VALUE) {
+            return;
+        }
+        std::wstring text = line + L"\r\n";
+        const int bytes = WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
+                                               static_cast<int>(text.size()),
+                                               NULL, 0, NULL, NULL);
+        if (bytes > 0) {
+            std::string utf8(static_cast<size_t>(bytes), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
+                                static_cast<int>(text.size()), utf8.data(),
+                                bytes, NULL, NULL);
+            DWORD written = 0;
+            WriteFile(file, utf8.data(), static_cast<DWORD>(utf8.size()),
+                      &written, NULL);
+        }
+        CloseHandle(file);
     }
 }
 
@@ -392,6 +426,8 @@ HRESULT CFFmpegEncoder::ReadConfig()
             m_codec = L"libx264";
         }
     }
+    AppendDebugLog(L"Config loaded from " + ini + L"; requested codec=" + m_codec +
+                   L"; ffmpeg=" + m_ffmpegPath);
     GetPrivateProfileStringW(L"video", L"preset", L"veryfast", buf,
                              ARRAYSIZE(buf), ini.c_str());
     m_preset = Trim(buf);
@@ -426,7 +462,7 @@ HRESULT CFFmpegEncoder::ReadConfig()
     m_crf = GetPrivateProfileIntW(L"video", L"crf", 18, ini.c_str());
     m_bitrate = GetPrivateProfileIntW(L"video", L"bitrate", 0, ini.c_str());
     m_crf = max(0, min(m_crf, 51));
-    m_bitrate = max(0L, m_bitrate);
+    m_bitrate = max(0L, min(400000000L, m_bitrate));
     GetPrivateProfileStringW(L"video", L"rate_mode", L"crf", buf,
                              ARRAYSIZE(buf), ini.c_str());
     m_cbr = Lower(Trim(buf)) == L"cbr" && m_bitrate > 0;
@@ -447,7 +483,11 @@ HRESULT CFFmpegEncoder::ReadConfig()
     // stream syntax are written to the requested side container while the
     // temporary MMD AVI gets a universally parseable H.264 stream.
     m_aviCodec = m_codec;
-    if (!m_alphaFormat.empty() ||
+    const bool separateContainer = m_container == L"mkv" ||
+                                   m_container == L"matroska" ||
+                                   m_container == L"mov" ||
+                                   m_container == L"webm";
+    if (!m_alphaFormat.empty() || separateContainer ||
         (m_codec.find(L"264") == std::wstring::npos &&
          m_codec.find(L"265") == std::wstring::npos &&
          m_codec.find(L"hevc") == std::wstring::npos)) {
@@ -562,6 +602,7 @@ bool CFFmpegEncoder::MergeAudio()
     if (m_aviPath.empty() || m_extraPath.empty() ||
         SamePath(m_aviPath, m_extraPath) ||
         !FileExists(m_aviPath) || !FileExists(m_extraPath)) {
+        AppendDebugLog(L"Audio merge inputs are missing or resolve to the same path.");
         return false;
     }
     const size_t dot = m_extraPath.find_last_of(L'.');
@@ -582,11 +623,13 @@ bool CFFmpegEncoder::MergeAudio()
     cmd += L" -b:a 192k -shortest";
     AppendQuoted(cmd, temp);
     if (!RunCommand(cmd, 120000) || !FileExists(temp)) {
+        AppendDebugLog(L"Audio merge command failed: " + cmd);
         DeleteFileW(temp.c_str());
         return false;
     }
     if (!MoveFileExW(temp.c_str(), m_extraPath.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        AppendDebugLog(L"Could not replace final container with audio-merged output.");
         DeleteFileW(temp.c_str());
         return false;
     }
@@ -595,14 +638,28 @@ bool CFFmpegEncoder::MergeAudio()
 
 void CFFmpegEncoder::PostProcessOutputs()
 {
-    if (!m_completed || m_extraPath.empty() || !FileExists(m_extraPath)) {
+    if (!m_completed) {
+        if (!m_extraPath.empty() && !SamePath(m_extraPath, m_aviPath) &&
+            FileExists(m_extraPath)) {
+            DeleteFileW(m_extraPath.c_str());
+            AppendDebugLog(L"Output failed; removed incomplete container and kept AVI for recovery.");
+        }
+        return;
+    }
+    if (m_extraPath.empty() || !FileExists(m_extraPath)) {
+        AppendDebugLog(L"Post-process skipped: final container file is missing.");
         return;
     }
     if (m_mergeAudio && !MergeAudio()) {
+        AppendDebugLog(L"Audio merge failed; kept AVI for recovery.");
         return;
     }
     if (m_deleteAvi && !m_aviPath.empty()) {
-        DeleteFileW(m_aviPath.c_str());
+        if (DeleteFileW(m_aviPath.c_str())) {
+            AppendDebugLog(L"Deleted intermediate AVI after successful export.");
+        } else {
+            AppendDebugLog(L"Could not delete intermediate AVI after successful export.");
+        }
     }
 }
 
@@ -642,7 +699,6 @@ void CFFmpegEncoder::AppendCodecArgs(std::wstring& cmd,
     const bool qsv = codec.find(L"qsv") != std::wstring::npos;
     const bool amf = codec.find(L"amf") != std::wstring::npos;
     const bool gpu = nvenc || qsv || amf;
-    const bool cbr = m_cbr && m_bitrate > 0;
     const bool lossless = codec.find(L"ffv1") != std::wstring::npos ||
                           codec.find(L"utvideo") != std::wstring::npos ||
                           codec.find(L"huffyuv") != std::wstring::npos ||
@@ -663,23 +719,8 @@ void CFFmpegEncoder::AppendCodecArgs(std::wstring& cmd,
     WCHAR numBuf[64];
     if (gpu) {
         if (m_bitrate > 0) {
-            swprintf_s(numBuf, L" -b:v %ld", m_bitrate);
-            cmd += numBuf;
-            if (cbr) {
-                swprintf_s(numBuf, L" -minrate %ld -maxrate %ld -bufsize %ld",
-                           m_bitrate, m_bitrate, m_bitrate * 2L);
-                cmd += numBuf;
-                if (nvenc) {
-                    cmd += L" -rc cbr -cbr 1 -strict_gop 1";
-                    if (m_nvencCbrPadding) {
-                        cmd += L" -cbr_padding 1";
-                    }
-                } else if (amf) {
-                    cmd += L" -rc cbr -enforce_hrd 1 -filler_data 1";
-                } else if (qsv) {
-                    cmd += L" -low_delay_brc 1";
-                }
-            }
+            cmd += rate_control::BuildArgs(codec, m_bitrate,
+                                           m_cbr, m_nvencCbrPadding);
         } else if (qsv) {
             cmd += L" -global_quality 23";
         } else if (amf) {
@@ -688,23 +729,8 @@ void CFFmpegEncoder::AppendCodecArgs(std::wstring& cmd,
             cmd += L" -qp 23";
         }
     } else if (m_bitrate > 0) {
-        swprintf_s(numBuf, L" -b:v %ld", m_bitrate);
-        cmd += numBuf;
-        if (cbr) {
-            swprintf_s(numBuf, L" -minrate %ld -maxrate %ld -bufsize %ld",
-                       m_bitrate, m_bitrate, m_bitrate * 2L);
-            cmd += numBuf;
-            if (codec.find(L"264") != std::wstring::npos) {
-                cmd += L" -x264-params nal-hrd=cbr:filler=1";
-            } else if (codec.find(L"265") != std::wstring::npos ||
-                       codec.find(L"hevc") != std::wstring::npos) {
-                const long kbps = m_bitrate / 1000L;
-                const long bufKbps = (m_bitrate * 2L) / 1000L;
-                cmd += L" -x265-params bitrate=" + std::to_wstring(kbps) +
-                       L":vbv-maxrate=" + std::to_wstring(kbps) +
-                       L":vbv-bufsize=" + std::to_wstring(bufKbps);
-            }
-        }
+        cmd += rate_control::BuildArgs(codec, m_bitrate,
+                                       m_cbr, m_nvencCbrPadding);
     } else if (m_crf > 0 && !lossless) {
         swprintf_s(numBuf, L" -crf %d", m_crf);
         cmd += numBuf;
@@ -773,7 +799,26 @@ void CFFmpegEncoder::BuildCmdLine(std::wstring& cmd)
         return;
     }
 
-    if (m_codec != m_aviCodec && !m_extraPath.empty()) {
+    std::wstring containerFormat = m_container;
+    if (containerFormat == L"mkv") containerFormat = L"matroska";
+    if (containerFormat == L"m4v") containerFormat = L"mp4";
+    const bool directContainer = containerFormat == L"matroska" ||
+                                 containerFormat == L"mov" ||
+                                 containerFormat == L"webm";
+    if (!m_extraPath.empty() && directContainer) {
+        cmd += L" -map 0:v";
+        AppendCodecArgs(cmd, m_codec, m_preset, m_bottomUp);
+        AppendQuoted(cmd, m_extraPath);
+        cmd += L" -map 0:v";
+        if (m_bottomUp) {
+            cmd += L" -vf vflip";
+        }
+        cmd += L" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -bf 0";
+        cmd += L" -f h264 pipe:1";
+        return;
+    }
+
+    if (!m_extraPath.empty() && m_codec != m_aviCodec) {
         cmd += L" -map 0:v";
         AppendCodecArgs(cmd, m_codec, m_preset, m_bottomUp);
         AppendQuoted(cmd, m_extraPath);
@@ -786,10 +831,7 @@ void CFFmpegEncoder::BuildCmdLine(std::wstring& cmd)
     cmd += L" -map 0:v";
     AppendCodecArgs(cmd, m_aviCodec, m_preset, m_bottomUp);
     if (!m_extraPath.empty()) {
-        std::wstring format = m_container;
-        if (format == L"mkv") format = L"matroska";
-        if (format == L"m4v") format = L"mp4";
-        const std::wstring tee = L"[f=" + format + L":onfail=ignore]" +
+        const std::wstring tee = L"[f=" + containerFormat + L"]" +
                                  TeeEscape(m_extraPath) + L"|[f=" + m_outMux +
                                  L"]pipe\\:1";
         cmd += L" -f tee";
@@ -936,10 +978,11 @@ void CFFmpegEncoder::SelectPortableCodec()
     AppendCodecArgs(probe, m_codec, m_preset, false);
     probe += L" -f null -";
     if (RunCommand(probe, 20000)) {
+        AppendDebugLog(L"Hardware encoder probe succeeded: " + probe);
         // FFmpeg 8+ can ask NVENC to insert filler NAL units. This is the
         // only way to keep a flat scene at the requested CBR bitrate. Probe
-        // the exact same command with the optional flag so FFmpeg 7.x and
-        // older vendor builds remain usable.
+        // the exact same command with the optional flag because FFmpeg
+        // builds and installed drivers can differ.
         if (m_nvenc && m_cbr) {
             const bool oldPadding = m_nvencCbrPadding;
             m_nvencCbrPadding = true;
@@ -974,6 +1017,8 @@ void CFFmpegEncoder::SelectPortableCodec()
     m_preset = L"veryfast";
     m_nvenc = m_qsv = m_amf = false;
     m_nvencCbrPadding = false;
+    AppendDebugLog(L"Hardware encoder probe failed for " + oldCodec +
+                   L"; falling back to " + m_codec + L". Probe: " + probe);
 }
 
 void CFFmpegEncoder::StopFFmpeg()
@@ -1159,6 +1204,11 @@ HRESULT CFFmpegEncoder::DeliverPacket(Packet& pkt)
     }
     if (pkt.data.size() > static_cast<size_t>(pOut->GetSize()) ||
         pkt.data.size() > LONG_MAX) {
+        AppendDebugLog(L"AVI sample exceeds downstream buffer: packet=" +
+                       std::to_wstring(pkt.data.size()) + L" buffer=" +
+                       std::to_wstring(pOut->GetSize()) + L" dimensions=" +
+                       std::to_wstring(m_width) + L"x" + std::to_wstring(m_height) +
+                       L" output_codec=" + m_aviCodec);
         pOut->Release();
         return VFW_E_BUFFER_OVERFLOW;
     }
@@ -1204,6 +1254,9 @@ HRESULT CFFmpegEncoder::EndOfStream()
         GetExitCodeProcess(m_hProc, &exitCode);
     }
     m_completed = SUCCEEDED(drain) && exitCode == 0;
+    AppendDebugLog(L"FFmpeg finished: exit=" + std::to_wstring(exitCode) +
+                   L"; drain_hr=" + std::to_wstring(static_cast<unsigned long>(drain)) +
+                   L"; completed=" + (m_completed ? L"true" : L"false"));
     const HRESULT eos = CTransformFilter::EndOfStream();
     return FAILED(drain) ? drain : eos;
 }

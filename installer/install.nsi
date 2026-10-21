@@ -16,6 +16,9 @@ Name "$(PRODUCT_NAME)"
 !ifndef OUTPUT_PATH
 !define OUTPUT_PATH "..\..\dist\MMDFfmpegEncoder-Setup.exe"
 !endif
+!ifndef FFMPEG_PATH
+!define FFMPEG_PATH "..\bin\ffmpeg.exe"
+!endif
 OutFile "${OUTPUT_PATH}"
 ; Install into the user's own folder so the config file (FFmpegEncoder.ini)
 ; lives next to the app and is removed together with it on uninstall.
@@ -24,7 +27,7 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !define APP_NAME "$(PRODUCT_NAME)"
-!define APP_VERSION "1.2.0"
+!define APP_VERSION "1.2.3"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MMDFfmpegEncoder"
 
 !insertmacro MUI_PAGE_WELCOME
@@ -44,7 +47,7 @@ SetCompressor /SOLID lzma
 
 Section "$(INSTALL_SECTION)" SecMain
   SetOutPath "$INSTDIR\bin"
-  File "..\bin\ffmpeg.exe"
+  File "${FFMPEG_PATH}"
 
   SetOutPath "$INSTDIR"
   File "..\native-filter\build\FFmpegVideoEncoder.dll"

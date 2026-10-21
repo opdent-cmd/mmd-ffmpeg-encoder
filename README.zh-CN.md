@@ -1,158 +1,112 @@
-# MMD FFmpeg 编码器
+# MMD FFmpeg Encoder
 
 > [English](README.md)
 
-让 MikuMikuDance（64 位）的 AVI 输出使用现代编码（H.264 / HEVC / AV1），
-自动产出**单个带音轨的 MP4/MKV**，支持带透明通道的 WebM / MOV / MKV，
-渲染完成后自动清理 MMD 生成的临时 AVI。
+MMD 的 x64 DirectShow 视频编码器。它把 MMD 输出的 RGB 帧交给独立的
+`ffmpeg.exe` 编码，可生成 H.264、HEVC 或 AV1 视频，并按配置封装为 MP4、
+MKV 或 AVI。滤镜不会在 MMD 进程中加载 FFmpeg 编解码库。
 
-兼容版核心改为微软参考 BaseClasses 上构建的原生 x64 C++ DirectShow
-滤镜。MMD 进程内只加载很薄的 COM/滤镜外壳，所有编解码工作都在独立的
-`ffmpeg.exe` 进程完成；Rust + Slint 配置界面继续保留。
+## 使用
 
-## 功能
+1. 运行 `dist/MMDFfmpegEncoder-Setup.exe` 安装。安装程序注册 x64 DirectShow
+   编码器，并安装配置工具和 FFmpeg。
+2. 打开「MMD FFmpeg 编码器配置」，选择编码器、视频格式、码率模式和输出容器。
+3. 在 MMD 中打开「文件 → 渲染到 AVI 文件」，将视频压缩器设为
+   **FFmpeg Video Encoder (H.264/HEVC/AV1)**，然后开始渲染。
+4. 如需音频，在 MMD 的 AVI 输出设置中选择 WAV 音轨。渲染结束后，程序会尝试
+   将音轨合并到配置的输出文件，并清理临时 AVI。
 
-- 默认使用兼容性最高的 CPU 编码；也可手动指定 NVIDIA NVENC / Intel
-  QSV / AMD AMF，启动前会预检，编码器或驱动不可用时回退 CPU
-- 格式：H.264 / HEVC / AV1（不支持的硬件组合自动回退 CPU）
-- 码率模式：质量优先（CRF）/ 动态码率（VBR）/ 恒定码率（CBR），kbps 自填；
-  CBR 会同时设置目标、最小、最大码率和缓冲区，适合恒定高码率交付视频
-- 配置界面会列出 Windows 当前 GPU 适配器和 bundled FFmpeg 中注册的
-  NVENC/QSV/AMF 编码器，可手动指定硬件；运行时打开失败会自动回退 CPU
-- 配置界面和安装器会自动跟随系统语言：中文地区显示简体中文，其他地区显示英文
-- 输出：MP4（默认）/ MKV / 传统 AVI，渲染成功后自动清理临时 AVI
-- 透明输出：WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1 无损)，
-  保留 MMD 帧里的 Alpha 通道；透明格式统一走 CPU 编码
-- 自动把 MMD AVI 里的音轨无损合并进 MP4（AAC）
-- 重复渲染同名文件时自动覆盖，不会因旧文件存在而失败
-- FFmpeg 诊断日志写入系统临时目录，方便提交 issue 排查
-- 图形化配置界面（Rust + Slint）
-- Windows 安装包（NSIS，约 27MB，内含 ffmpeg 7.1）
-- 编码器与驱动不兼容时自动降级 CPU，不卡死、不崩溃
+默认输出 MP4、H.264、CPU 编码和 CRF 质量模式。硬件编码需匹配的 GPU、驱动和
+FFmpeg 编码器；启动预检失败时会回退到对应的 CPU 编码器。
 
-> 透明说明：VP9 的 WebM 会用 `alpha_mode=1` 标记透明通道，部分工具
-> （包括 ffprobe）会显示成 yuv420p，这是已知现象，Chrome/OBS 等支持
-> WebM alpha 的播放器可以看到透明效果。AV1 alpha 需要编码器本身支持，
-> 当前内置 libaom 不支持，因此界面不提供「WebM AV1 透明」。
+## 码率控制
 
-## 崩溃与参与修复
+码率输入单位为 kbps。这里的数值用于视频流，不包含音频和容器开销；短片、静态
+画面和编码器延迟都会影响测得的平均码率。码率控制不是文件大小保证。
 
-`quartz.dll` 是 Windows 自带的 DirectShow 运行时。从 1.2.0 兼容版开始，
-COM 生命周期、引脚、媒体类型和分配器统一交给微软原生 BaseClasses，
-不再使用 Rust 自动生成的 COM thunk，专门移除了 1.1.7/1.1.8 在 Win10 上
-触发的 `OutputPin::ConnectedTo` 崩溃路径。提 issue 时请附上：
+| 模式 | 当前行为 | 适用情况 |
+|---|---|---|
+| CRF | 以画质为优先，不指定目标码率；CRF 默认值为 18 | 不要求固定带宽或文件大小时使用 |
+| VBR | 输入值作为目标平均码率；峰值上限为目标值的 1.5 倍，VBV 缓冲为目标值的 2 倍 | 需要控制平均码率，同时允许复杂画面使用更多码率 |
+| CBR | 目标、最小和最大码率设为相同值，VBV 缓冲为目标值的 2 倍；可用时启用编码器的 HRD/filler 控制 | 需要较稳定的传输码率或交付码率 |
 
-- `%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder_debug.log`
-- Windows 错误报告生成的 dmp（如果有）
-- Windows 版本号（`winver`）以及 `C:\Windows\System32\quartz.dll`
-  的文件版本
+VBR/CBR 的具体执行由编码器决定：NVENC 使用显式 rate-control 模式，AMF 的 VBR
+使用峰值约束模式，QSV 依据目标码率与峰值设置工作。CPU 的 H.264/HEVC 路径会配置
+VBV；H.264 使用 filler NAL，HEVC 使用 x265 的 HRD/strict-CBR 选项。不同硬件、
+驱动和编码器版本对填充数据及码率波动的处理不同，因此 CBR 不承诺每个短时间窗口
+或最终文件都精确等于输入值。最终文件的总码率还包含音频和封装开销。
 
-如果你有能力自己调试，最好的方式是 **fork 本仓库、动手尝试修复并提交
-Pull Request**——没有谁能覆盖所有 Windows / quartz.dll 组合，社区的修复
-是让编码器对所有人更稳定的最快途径。
+如果目标是限制带宽峰值，选 VBR；如果目标是压低文件体积，优先调整 VBR 目标值，
+不要把 CBR 当作文件大小限制。透明输出使用独立的 CPU 编码路径，不应用此处的
+VBR/CBR 设置。
+
+## 编码器与输出
+
+仓库按 FFmpeg 大版本维护两个发行分支：`main` 使用 FFmpeg 9，面向当前硬件；
+`ffmpeg-7` 使用 FFmpeg 7.1，供仍依赖旧 NVENC/QSV/AMF 支持的设备使用。两者的
+滤镜、配置工具和 VBR/CBR 修复保持一致，但硬件编码参数按各自 FFmpeg 版本分别维护，
+不要把一个分支的 FFmpeg 参数直接移植到另一个分支。
+
+- 视频编码：H.264、HEVC、AV1；可选 CPU、NVIDIA NVENC、Intel QSV 或 AMD AMF。
+- 输出容器：MP4、MKV，或只保留 MMD AVI。
+- Alpha 输出：WebM/VP9、MOV/ProRes 4444、MKV/FFV1。透明模式固定走 CPU 编码。
+- 配置工具会探测 FFmpeg 编码器和 Windows GPU 适配器；探测结果不代表每种编码模式
+  都能在当前驱动上启动，实际参数仍会在渲染前预检。
+- `main` 安装包使用 gyan.dev 静态 GPL essentials FFmpeg
+  `2026-10-19-git-2344518cc5`（FFmpeg 9）；兼容旧硬件的 FFmpeg 7.1 安装包从
+  `ffmpeg-7` 分支单独构建。下载时根据显卡代际选择 FFmpeg 9 或 FFmpeg 7 安装包。
+
+## 故障诊断
+
+FFmpeg 进程日志位于：
+
+```text
+%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder_debug.log
+```
+
+报告问题时请附上日志、Windows 版本、所选编码器/码率模式/码率，以及可复现步骤。
+如果成片开头缺少数秒画面，请临时在安装目录的 `FFmpegEncoder.ini` 中设置：
+
+```ini
+[video]
+delete_avi=0
+merge_audio=0
+```
+
+重新渲染后保留临时 AVI，并与编码文件对照：两者缺少相同画面时，检查 MMD 帧输入和
+共用的编码路径；只有 AVI 缺帧时，检查 AVI Mux；只有配置输出缺帧时，检查并行封装和
+音频后处理。分享前请确认样片不含隐私或敏感内容。定位完成后可恢复这两个设置。
+
+## 从源码构建
+
+需要 Windows 10/11 x64、Rust stable、Visual Studio 2022 C++ Build Tools、Windows
+SDK、NSIS 3.x，以及放在仓库 `bin/ffmpeg.exe` 的 FFmpeg 构建。
+
+```powershell
+native-filter\build.cmd
+native-filter\build\rate_control_args.exe
+native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
+cargo test -p ffmpeg_encoder
+cargo build --release -p mmd_encoder_config
+New-Item -ItemType Directory -Force dist | Out-Null
+$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg9.exe'
+& "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" installer\install.nsi
+```
+
+安装包生成于 `dist/MMDFfmpegEncoder-Setup.exe`。滤镜和配置程序可单独构建；只有在
+确认打包内容后才应分发安装程序。安装需要管理员权限以注册 DirectShow 滤镜。
 
 ## 项目结构
 
-```
-├── native-filter/ 原生 C++ DirectShow 滤镜（发布实现）
-│   ├── src/       BaseClasses 变换滤镜与 ffmpeg 子进程
-│   ├── tests/     无需注册的 COM ABI 压力测试
-│   └── third_party/ 微软 DirectShow BaseClasses
-├── filter/       保留用于诊断/回退的旧 Rust 滤镜
-├── ui/           Slint 配置界面（Rust 二进制）
-│   ├── src/      ini 读写、编码器映射
-│   └── ui/       界面定义（main.slint）
-├── installer/    NSIS 安装脚本
-├── Cargo.toml    workspace
-└── LICENSE       GPL-3.0
-```
-
-## 构建
-
-需要 Rust（stable）、Visual Studio 2022 C++ Build Tools 和 Windows 10/11 SDK。
-
-```powershell
-# 原生 x64 DirectShow DLL + ABI 压力测试
-native-filter\build.cmd
-native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
-
-# Rust/Slint 配置界面
-cargo build --release -p mmd_encoder_config
-
-# 产物
-# native-filter/build/FFmpegVideoEncoder.dll  DirectShow 滤镜
-# target/release/mmd_encoder_config.exe  配置界面
-```
-
-注册滤镜（需要管理员）：
-
-```powershell
-regsvr32 "native-filter\build\FFmpegVideoEncoder.dll"
-```
-
-打包安装程序（需要 NSIS 3.x）：
-
-```powershell
-makensis installer\install.nsi
-```
-
-## 配置
-
-安装后打开「MMDEncoderConfig.exe」：
-
-- 硬件加速：自动（推荐）/ NVIDIA (NVENC) / Intel (QSV) / AMD (AMF) /
-  不使用（CPU）
-- 编码格式：H.264 / HEVC / AV1
-- 码率：质量优先（CRF）/ 动态码率（VBR），kbps 自填
-- 输出：MP4（推荐）/ MKV / AVI（旧）
-- 透明输出：关闭 / WebM (VP9) / MOV (ProRes 4444) / MKV (FFV1)
-
-配置文件 `FFmpegEncoder.ini` 与程序放在同一目录，卸载时一并删除。
-
-## 在 MMD 中使用
-
-1. 打开 MMD → 文件 → 渲染到 AVI 文件
-2. 视频压缩器选择 **FFmpeg Video Encoder (H.264/HEVC/AV1)**
-3. 若需要声音，在 MMD 的 AVI 输出设置中指定音乐 WAV 文件
-4. 需要透明背景时，在配置界面选择透明输出格式，并确保 MMD 输出本身
-   包含 Alpha 通道
-5. 渲染完成后，输出目录只有 `同名.mp4/.webm/.mov/.mkv`（含音轨）
-
-## 工作原理
-
-```
-MMD 渲染帧 → MMDxShow → SampleGrabber → 本滤镜 → AVI Mux → MMD 写 .avi
-                                        │
-                                        ├─ ffmpeg 编码（NVENC/QSV/AMF/CPU）
-                                        ├─ 同时封装 .mp4/.mkv
-                                        │  （透明模式另写 .webm/.mov/.mkv）
-                                        └─ 完成后：音轨合并 + 删除 .avi
-```
-
-COM 生命周期、`IBaseFilter`、输入/输出引脚、媒体协商和分配器由微软原生
-DirectShow BaseClasses 实现。项目代码负责校验 MMD 的 RGB 媒体类型、把帧
-送往进程外 ffmpeg，并为 AVI Mux 切分 Annex B 数据；MMD 不加载任何 FFmpeg
-编解码 DLL。
+- `native-filter/`：发布使用的 C++ DirectShow 滤镜及 ABI、码率参数测试。
+- `filter/`：保留的 Rust 编码实现和码率参数测试。
+- `ui/`：Rust + Slint 配置工具。
+- `installer/`：NSIS 安装脚本。
+- `bin/ffmpeg.exe`：本地打包使用的 FFmpeg；可执行文件由 `.gitignore` 排除。
 
 ## 许可
 
-本项目以 **GPL-3.0** 发布（见 [LICENSE](LICENSE)）。
-
-- 滤镜与配置界面为本项目原创代码；原生滤镜使用微软 MIT 许可的 Windows
-  Classic Samples DirectShow BaseClasses；
-- 依赖：`windows` / `windows-core`（MIT/Apache-2.0）、`slint`
-  （GPL-3.0 或商业）、ffmpeg（GPL 构建）。
-- 第三方组件清单与许可详见
-  [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-- 随安装包分发的 ffmpeg（GPL 构建）对应源码可从
-  <https://ffmpeg.org/download.html> 获取；Slint 的 GPL 版本源码见
-  <https://github.com/slint-ui/slint>。
-- 安装程序包含 GPL-3.0 许可协议页，并在安装目录附带 `LICENSE` 与
-  `THIRD_PARTY_NOTICES.md`。
-
-## 致谢
-
-- [ffmpeg](https://ffmpeg.org/)
-- [Slint](https://slint.dev/)
-- [NSIS](https://nsis.sourceforge.io/)
-- MikuMikuDance 社区
+本项目以 GPL-3.0 发布。FFmpeg 为 GPL 构建；其版本、源码提交、校验值和第三方组件
+许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。安装包包含项目的 GPL
+许可文本。DirectShow BaseClasses 许可见
+[`native-filter/third_party/WINDOWS_CLASSIC_SAMPLES_LICENSE`](native-filter/third_party/WINDOWS_CLASSIC_SAMPLES_LICENSE)。
