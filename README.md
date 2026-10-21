@@ -55,6 +55,10 @@ still require older NVENC/QSV/AMF support. Both lines share the filter, settings
 UI, and VBR/CBR fixes, but keep version-specific hardware encoder arguments in
 their respective branches. Do not move FFmpeg-specific options between the
 branches without checking that build's encoder help.
+FFmpeg 7.1 NVENC CBR requires `-cbr 1`; FFmpeg 9 removed that option, and
+passing it makes hardware preflight fail and fall back to CPU. The branches
+keep this difference isolated, restoring CBR on the legacy line without
+reintroducing an invalid option on the current line.
 
 - Video codecs: H.264, HEVC, and AV1; CPU, NVIDIA NVENC, Intel QSV, or AMD AMF.
 - Containers: MP4, MKV, or MMD AVI only.
@@ -106,8 +110,9 @@ native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
 cargo test -p ffmpeg_encoder
 cargo build --release -p mmd_encoder_config
 New-Item -ItemType Directory -Force dist | Out-Null
-$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg9.exe'
-& "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" installer\install.nsi
+$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg7.exe'
+$ffmpeg = 'bin\ffmpeg.exe' # Replace with the FFmpeg 7.1 executable path.
+& "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" "/DFFMPEG_PATH=$ffmpeg" installer\install.nsi
 ```
 
 The installer is written to `dist/MMDFfmpegEncoder-Setup.exe`. The filter and

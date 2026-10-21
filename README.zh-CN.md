@@ -45,7 +45,9 @@ VBR/CBR 设置。
 仓库按 FFmpeg 大版本维护两个发行分支：`main` 使用 FFmpeg 9，面向当前硬件；
 `ffmpeg-7` 使用 FFmpeg 7.1，供仍依赖旧 NVENC/QSV/AMF 支持的设备使用。两者的
 滤镜、配置工具和 VBR/CBR 修复保持一致，但硬件编码参数按各自 FFmpeg 版本分别维护，
-不要把一个分支的 FFmpeg 参数直接移植到另一个分支。
+不要把一个分支的 FFmpeg 参数直接移植到另一个分支。FFmpeg 7.1 的 NVENC CBR
+需要 `-cbr 1`；FFmpeg 9 已移除此选项，继续传入会导致硬件预检失败并回退到 CPU。
+两个分支分别维护该参数，修复旧版 CBR 的同时避免新版使用不兼容参数。
 
 - 视频编码：H.264、HEVC、AV1；可选 CPU、NVIDIA NVENC、Intel QSV 或 AMD AMF。
 - 输出容器：MP4、MKV，或只保留 MMD AVI。
@@ -89,8 +91,9 @@ native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
 cargo test -p ffmpeg_encoder
 cargo build --release -p mmd_encoder_config
 New-Item -ItemType Directory -Force dist | Out-Null
-$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg9.exe'
-& "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" installer\install.nsi
+$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg7.exe'
+$ffmpeg = 'bin\ffmpeg.exe' # Replace with the FFmpeg 7.1 executable path.
+& "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" "/DFFMPEG_PATH=$ffmpeg" installer\install.nsi
 ```
 
 安装包生成于 `dist/MMDFfmpegEncoder-Setup.exe`。滤镜和配置程序可单独构建；只有在
