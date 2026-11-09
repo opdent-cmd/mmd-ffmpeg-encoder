@@ -47,6 +47,11 @@ Choose VBR to cap peaks. To reduce file size, lower the VBR target rather than
 using CBR as a file-size limit. Alpha output uses a separate CPU encoding path
 and does not use these VBR/CBR settings.
 
+Encoded output is delivered directly from the stdout reader to AVI Mux; the
+release filter no longer stores an encoded-frame queue. If downstream delivery
+falls behind, stdout reading pauses and the pipe applies backpressure, so memory
+no longer grows with render length.
+
 ## Encoders and Output
 
 The repository maintains two FFmpeg-major release lines: `main` bundles FFmpeg

@@ -359,14 +359,17 @@ HRESULT CFFmpegEncoder::StartStreaming()
     StopFFmpeg();
 
     CAutoLock lock(&m_lock);
-    m_pktQueue.clear();
-    m_tsQueue.clear();
+    {
+        std::lock_guard<std::mutex> tsLock(m_tsLock);
+        m_tsQueue.clear();
+        m_lastTs = 0;
+    }
     m_inBuf.clear();
     m_group.clear();
     m_groupHasVcl = false;
-    m_lastTs = 0;
     m_firstPkt = true;
     m_readerDone = false;
+    m_readerHr.store(S_OK);
     m_completed = false;
     ResolveOutputPaths();
     const HRESULT hr = StartFFmpeg();
@@ -947,6 +950,7 @@ HRESULT CFFmpegEncoder::StartFFmpeg()
     m_hChildStdoutR = hStdoutRd;
     CloseHandle(pi.hThread);
 
+    m_readerHr.store(S_OK);
     m_hThread = CreateThread(NULL, 0, ReaderThreadProc, this, 0, NULL);
     if (!m_hThread) {
         StopFFmpeg();
@@ -1080,6 +1084,10 @@ HRESULT CFFmpegEncoder::Receive(IMediaSample* pSample)
     if (!m_started || !m_hProc || !m_hChildStdinW) {
         return S_OK;
     }
+    const HRESULT deliveryHr = ReaderError();
+    if (FAILED(deliveryHr)) {
+        return deliveryHr;
+    }
 
     BYTE* pSrc = NULL;
     long cb = pSample->GetActualDataLength();
@@ -1089,12 +1097,12 @@ HRESULT CFFmpegEncoder::Receive(IMediaSample* pSample)
 
     REFERENCE_TIME tStart = 0, tStop = 0;
     if (FAILED(pSample->GetTime(&tStart, &tStop))) {
-        CAutoLock lock(&m_lock);
+        std::lock_guard<std::mutex> lock(m_tsLock);
         tStart = m_lastTs + m_frameDur;
         m_lastTs = tStart;
     }
     {
-        CAutoLock lock(&m_lock);
+        std::lock_guard<std::mutex> lock(m_tsLock);
         m_tsQueue.push_back(tStart);
         m_lastTs = tStart;
     }
@@ -1103,7 +1111,7 @@ HRESULT CFFmpegEncoder::Receive(IMediaSample* pSample)
     if (FAILED(hr)) {
         return hr;
     }
-    return DrainQueue();
+    return ReaderError();
 }
 
 HRESULT CFFmpegEncoder::WriteFrame(const BYTE* data, long cb)
@@ -1152,23 +1160,10 @@ HRESULT CFFmpegEncoder::WriteFrame(const BYTE* data, long cb)
     return S_OK;
 }
 
-HRESULT CFFmpegEncoder::DrainQueue()
+HRESULT CFFmpegEncoder::ReaderError() const
 {
-    for (;;) {
-        Packet pkt;
-        {
-            CAutoLock lock(&m_lock);
-            if (m_pktQueue.empty()) {
-                return S_OK;
-            }
-            pkt = std::move(m_pktQueue.front());
-            m_pktQueue.pop_front();
-        }
-        const HRESULT hr = DeliverPacket(pkt);
-        if (FAILED(hr)) {
-            return hr;
-        }
-    }
+    const LONG hr = m_readerHr.load();
+    return FAILED(hr) ? static_cast<HRESULT>(hr) : S_OK;
 }
 
 HRESULT CFFmpegEncoder::DeliverPacket(Packet& pkt)
@@ -1179,7 +1174,7 @@ HRESULT CFFmpegEncoder::DeliverPacket(Packet& pkt)
 
     REFERENCE_TIME start, stop;
     {
-        CAutoLock lock(&m_lock);
+        std::lock_guard<std::mutex> lock(m_tsLock);
         if (!m_tsQueue.empty()) {
             start = m_tsQueue.front();
             m_tsQueue.pop_front();
@@ -1246,9 +1241,16 @@ HRESULT CFFmpegEncoder::EndOfStream()
         if (m_hProc) {
             TerminateProcess(m_hProc, 1);
         }
-        WaitForSingleObject(m_hThread, 2000);
+        CancelSynchronousIo(m_hThread);
+        if (m_hChildStdoutR) {
+            CloseHandle(m_hChildStdoutR);
+            m_hChildStdoutR = NULL;
+        }
+        if (WaitForSingleObject(m_hThread, 5000) != WAIT_OBJECT_0) {
+            WaitForSingleObject(m_hThread, INFINITE);
+        }
     }
-    const HRESULT drain = DrainQueue();
+    const HRESULT drain = ReaderError();
     DWORD exitCode = STILL_ACTIVE;
     if (m_hProc && WaitForSingleObject(m_hProc, 5000) == WAIT_OBJECT_0) {
         GetExitCodeProcess(m_hProc, &exitCode);
@@ -1280,20 +1282,51 @@ void CFFmpegEncoder::ReaderLoop()
         if (!ReadFile(m_hChildStdoutR, buf, sizeof(buf), &rd, NULL) || rd == 0) {
             break;
         }
-        OnRead(buf, rd);
+        HRESULT hr = OnRead(buf, rd);
+        if (FAILED(hr)) {
+            LONG expected = S_OK;
+            m_readerHr.compare_exchange_strong(expected, static_cast<LONG>(hr));
+            break;
+        }
     }
+    std::vector<Packet> packets;
     {
         CAutoLock lock(&m_lock);
-        FlushGroup(true);
+        FlushGroup(true, packets);
+    }
+    if (SUCCEEDED(ReaderError())) {
+        const HRESULT hr = DeliverPackets(packets);
+        if (FAILED(hr)) {
+            m_readerHr.store(static_cast<LONG>(hr));
+        }
     }
     m_readerDone.store(true);
 }
 
-void CFFmpegEncoder::OnRead(const BYTE* data, size_t len)
+HRESULT CFFmpegEncoder::OnRead(const BYTE* data, size_t len)
 {
-    CAutoLock lock(&m_lock);
-    m_inBuf.insert(m_inBuf.end(), data, data + len);
-    ParseAnnexB();
+    std::vector<Packet> packets;
+    {
+        CAutoLock lock(&m_lock);
+        m_inBuf.insert(m_inBuf.end(), data, data + len);
+        ParseAnnexB(packets);
+    }
+    return DeliverPackets(packets);
+}
+
+HRESULT CFFmpegEncoder::DeliverPackets(std::vector<Packet>& packets)
+{
+    // Delivery is deliberately synchronous: if AVI Mux or the file writer is
+    // slow, blocking here stops stdout reads. ffmpeg then stops consuming raw
+    // frames, and the stdin pipe applies backpressure to MMD. No encoded-data
+    // queue can grow with render length.
+    for (Packet& pkt : packets) {
+        const HRESULT hr = DeliverPacket(pkt);
+        if (FAILED(hr)) {
+            return hr;
+        }
+    }
+    return S_OK;
 }
 
 bool CFFmpegEncoder::NalIsVcl(const BYTE* nal, size_t len) const
@@ -1315,7 +1348,7 @@ bool CFFmpegEncoder::NalIsVcl(const BYTE* nal, size_t len) const
     return true;
 }
 
-void CFFmpegEncoder::ParseAnnexB()
+void CFFmpegEncoder::ParseAnnexB(std::vector<Packet>& packets)
 {
     auto findStartCode = [&](size_t from, size_t* codeLen) -> size_t {
         for (size_t i = from; i + 2 < m_inBuf.size(); i++) {
@@ -1365,7 +1398,7 @@ void CFFmpegEncoder::ParseAnnexB()
                 nalLen--;
             }
             if (nalLen > 0) {
-                PushNal(nal, nalLen);
+                PushNal(nal, nalLen, packets);
             }
         }
         keepFrom = next;
@@ -1377,14 +1410,15 @@ void CFFmpegEncoder::ParseAnnexB()
     m_inBuf.erase(m_inBuf.begin(), m_inBuf.begin() + keepFrom);
 }
 
-void CFFmpegEncoder::PushNal(const BYTE* nal, size_t len)
+void CFFmpegEncoder::PushNal(const BYTE* nal, size_t len,
+                             std::vector<Packet>& packets)
 {
     if (!nal || len == 0) {
         return;
     }
     const bool vcl = NalIsVcl(nal, len);
     if (!vcl && m_groupHasVcl) {
-        FlushGroup(false);
+        FlushGroup(false, packets);
     }
     static const BYTE startCode[] = {0, 0, 0, 1};
     m_group.insert(m_group.end(), startCode, startCode + ARRAYSIZE(startCode));
@@ -1392,11 +1426,11 @@ void CFFmpegEncoder::PushNal(const BYTE* nal, size_t len)
     if (vcl) {
         m_groupHasVcl = true;
         // ffmpeg's bundled encoders emit one VCL NAL per frame by default.
-        FlushGroup(false);
+        FlushGroup(false, packets);
     }
 }
 
-void CFFmpegEncoder::FlushGroup(bool atEof)
+void CFFmpegEncoder::FlushGroup(bool atEof, std::vector<Packet>& packets)
 {
     if (atEof && !m_inBuf.empty()) {
         size_t start = std::string::npos;
@@ -1429,7 +1463,7 @@ void CFFmpegEncoder::FlushGroup(bool atEof)
                 std::vector<BYTE> tail(m_inBuf.begin() + start + codeLen,
                                        m_inBuf.begin() + end);
                 m_inBuf.clear();
-                PushNal(tail.data(), tail.size());
+                PushNal(tail.data(), tail.size(), packets);
             }
         }
         m_inBuf.clear();
@@ -1439,6 +1473,6 @@ void CFFmpegEncoder::FlushGroup(bool atEof)
         pkt.data.swap(m_group);
         m_group.clear();
         m_groupHasVcl = false;
-        m_pktQueue.push_back(std::move(pkt));
+        packets.push_back(std::move(pkt));
     }
 }

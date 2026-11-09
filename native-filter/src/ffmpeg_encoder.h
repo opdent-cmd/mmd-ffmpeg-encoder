@@ -7,6 +7,7 @@
 #include <vector>
 #include <deque>
 #include <atomic>
+#include <mutex>
 
 // CLSID: {D79D43B2-F005-40A4-BE18-AFD19C03E6E6}
 DEFINE_GUID(CLSID_FFmpegEncoder,
@@ -52,15 +53,16 @@ private:
     bool    MergeAudio();
     bool    RunCommand(const std::wstring& cmd, DWORD timeoutMs);
     HRESULT WriteFrame(const BYTE* data, long cb);
-    HRESULT DrainQueue();
     HRESULT DeliverPacket(Packet& pkt);
+    HRESULT DeliverPackets(std::vector<Packet>& packets);
+    HRESULT ReaderError() const;
 
     static DWORD WINAPI ReaderThreadProc(LPVOID param);
     void ReaderLoop();
-    void OnRead(const BYTE* data, size_t len);
-    void ParseAnnexB();
-    void PushNal(const BYTE* nal, size_t len);
-    void FlushGroup(bool atEof);
+    HRESULT OnRead(const BYTE* data, size_t len);
+    void ParseAnnexB(std::vector<Packet>& packets);
+    void PushNal(const BYTE* nal, size_t len, std::vector<Packet>& packets);
+    void FlushGroup(bool atEof, std::vector<Packet>& packets);
     bool NalIsVcl(const BYTE* nal, size_t len) const;
     static GUID FourccGuid(DWORD fcc);
 
@@ -107,13 +109,17 @@ private:
     HANDLE  m_hChildStdoutR = NULL; // our read end (child stdout)
     HANDLE  m_hThread = NULL;
     std::atomic<bool> m_readerDone{false};
+    std::atomic<LONG> m_readerHr{S_OK};
 
-    // Shared reader/stream state
+    // Shared Annex B parser state. Encoded packets are delivered directly
+    // from the reader thread and are never retained in a growing queue.
     CCritSec m_lock;
     std::vector<BYTE> m_inBuf;      // Annex B byte accumulation
     std::vector<BYTE> m_group;      // current access unit being assembled
     bool    m_groupHasVcl = false;
-    std::deque<Packet> m_pktQueue;
+
+    // Input/reference timestamps are consumed as encoded packets arrive.
+    mutable std::mutex m_tsLock;
     std::deque<REFERENCE_TIME> m_tsQueue;
     REFERENCE_TIME m_lastTs = 0;
     bool    m_firstPkt = true;

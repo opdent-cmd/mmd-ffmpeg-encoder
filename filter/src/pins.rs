@@ -141,6 +141,9 @@ fn drain_deliver(shared: &Shared) {
     }
 }
 
+const MAX_PENDING_FRAMES: usize = 8;
+const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
+
 /// Called from Filter::Run once the encoder is ready: write any frames that
 /// arrived earlier, then deliver their packets and propagate a deferred
 /// EndOfStream if one was received before the encoder started.
@@ -600,12 +603,19 @@ impl IMemInputPin_Impl for InputPin_Impl {
                 None => {
                     // Encoder not started yet: buffer the frame data so the
                     // beginning of the render is not lost.
-                    self.shared
-                        .core
-                        .lock()
-                        .unwrap()
-                        .pending_frames
-                        .push(frame.to_vec());
+                    let mut core = self.shared.core.lock().unwrap();
+                    let mut pending_bytes = core.pending_frames.iter().map(Vec::len).sum::<usize>();
+                    while !core.pending_frames.is_empty()
+                        && (core.pending_frames.len() >= MAX_PENDING_FRAMES
+                            || pending_bytes.saturating_add(frame.len()) > MAX_PENDING_BYTES)
+                    {
+                        // Pre-start buffers are transient. Bound them so a
+                        // hung probe cannot accumulate raw 1080p frames.
+                        if let Some(dropped) = core.pending_frames.pop_front() {
+                            pending_bytes = pending_bytes.saturating_sub(dropped.len());
+                        }
+                    }
+                    core.pending_frames.push_back(frame.to_vec());
                 }
             }
         }

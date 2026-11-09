@@ -68,7 +68,7 @@ pub struct Core {
     pub completed: bool,
     // Frames that arrive before the ffmpeg child is ready. They are written
     // as soon as the encoder starts, so no leading frames are lost.
-    pub pending_frames: Vec<Vec<u8>>,
+    pub pending_frames: VecDeque<Vec<u8>>,
     // EndOfStream arrived before the encoder was started; propagate it to
     // the AVI Mux only after the buffered frames have been flushed.
     pub eos_pending: bool,
@@ -111,7 +111,7 @@ impl Shared {
                 last_ts: 0,
                 state: State_Stopped,
                 completed: false,
-                pending_frames: Vec::new(),
+                pending_frames: VecDeque::new(),
                 eos_pending: false,
                 eos_sent: false,
                 avi_path: String::new(),
