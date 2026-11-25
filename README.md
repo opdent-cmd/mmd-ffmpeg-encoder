@@ -127,24 +127,29 @@ footage. Restore the settings after testing.
 ## Build from Source
 
 Requirements: Windows 10/11 x64, Rust stable, Visual Studio 2022 C++ Build
-Tools, Windows SDK, NSIS 3.x, and an FFmpeg build at `bin/ffmpeg.exe`.
+Tools, Windows SDK, NSIS 3.x, and an FFmpeg build. Releases ship one installer
+that carries both FFmpeg major lines: the bundled `bin\ffmpeg.exe` is the
+default, and the settings UI can point at a different build.
 
 ```powershell
 native-filter\build.cmd
 native-filter\build\rate_control_args.exe
+native-filter\build\alpha_color.exe
 native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
 cargo test -p ffmpeg_encoder
 cargo build --release -p mmd_encoder_config
 New-Item -ItemType Directory -Force dist | Out-Null
-$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg7.exe'
-$ffmpeg = 'bin\ffmpeg.exe' # Replace with the FFmpeg 7.1 executable path.
+$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup.exe'
+$ffmpeg = '<path to the FFmpeg 7.1 or FFmpeg 9 ffmpeg.exe>'
 & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" "/DFFMPEG_PATH=$ffmpeg" installer\install.nsi
 ```
 
-The installer is written to `dist/MMDFfmpegEncoder-Setup.exe`. The filter and
-settings utility can be built independently; distribute an installer only
-after checking its contents. Installation requires administrator privileges
-to register the DirectShow filter.
+`/DFFMPEG_PATH` is optional; without it the installer leaves `bin\ffmpeg.exe`
+out and the filter uses the path stored in `FFmpegEncoder.ini`. The installer is
+written to the `/DOUTPUT_PATH` you pass. The filter and settings utility can be
+built independently; distribute an installer only after checking its contents.
+Installation requires administrator privileges to register the DirectShow
+filter.
 
 ## Repository Layout
 

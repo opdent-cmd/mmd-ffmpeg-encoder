@@ -104,22 +104,26 @@ merge_audio=0
 ## 从源码构建
 
 需要 Windows 10/11 x64、Rust stable、Visual Studio 2022 C++ Build Tools、Windows
-SDK、NSIS 3.x，以及放在仓库 `bin/ffmpeg.exe` 的 FFmpeg 构建。
+SDK、NSIS 3.x，以及一份 FFmpeg 构建。发行时只出一个安装包，同时覆盖两条 FFmpeg
+大版本线：默认使用安装目录里的 `bin\ffmpeg.exe`，也可以在配置界面指向其他版本。
 
 ```powershell
 native-filter\build.cmd
 native-filter\build\rate_control_args.exe
+native-filter\build\alpha_color.exe
 native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
 cargo test -p ffmpeg_encoder
 cargo build --release -p mmd_encoder_config
 New-Item -ItemType Directory -Force dist | Out-Null
-$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg7.exe'
-$ffmpeg = 'bin\ffmpeg.exe' # Replace with the FFmpeg 7.1 executable path.
+$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup.exe'
+$ffmpeg = '<FFmpeg 7.1 或 FFmpeg 9 的 ffmpeg.exe 路径>'
 & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" "/DFFMPEG_PATH=$ffmpeg" installer\install.nsi
 ```
 
-安装包生成于 `dist/MMDFfmpegEncoder-Setup.exe`。滤镜和配置程序可单独构建；只有在
-确认打包内容后才应分发安装程序。安装需要管理员权限以注册 DirectShow 滤镜。
+`/DFFMPEG_PATH` 可省略；省略时安装包不包含 `bin\ffmpeg.exe`，滤镜改用它记录的
+`FFmpegEncoder.ini` 路径。安装包写到 `/DOUTPUT_PATH` 指定的位置。滤镜和配置程序
+可单独构建；只有在确认打包内容后才应分发安装程序。安装需要管理员权限以注册
+DirectShow 滤镜。
 
 ## 项目结构
 
