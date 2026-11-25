@@ -346,6 +346,8 @@ fn build_codec_args(cfg: &Config, fmt: &FormatInfo, a: &mut Vec<String>) {
                     // filler NAL units on flat scenes and is required for a
                     // true constant transport bitrate. Older builds simply
                     // omit it because they reject the option.
+                    a.push("-cbr".into());
+                    a.push("1".into());
                     a.push("-strict_gop".into());
                     a.push("1".into());
                     if nvenc_cbr_padding_supported(cfg) {
@@ -1074,7 +1076,7 @@ mod tests {
         assert!(joined.contains("-bufsize 16000000"), "args: {}", joined);
         assert!(joined.contains("-rc vbr"), "NVENC VBR mode: {}", joined);
         assert!(!joined.contains("-rc cbr"), "no CBR rc: {}", joined);
-        assert!(!joined.contains("-cbr 1"), "no legacy cbr flag: {}", joined);
+        assert!(!joined.contains("-cbr 1"), "VBR must not enable CBR: {}", joined);
         assert!(
             !joined.contains("-x264-params"),
             "no x264 params: {}",
@@ -1102,7 +1104,7 @@ mod tests {
         gpu.bitrate = 8_000_000;
         let args = build_args(&gpu, &test_fmt()).join(" ");
         assert!(args.contains("-rc cbr"), "NVENC CBR: {}", args);
-        assert!(!args.contains("-cbr 1"), "avoid removed FFmpeg option: {}", args);
+        assert!(args.contains("-cbr 1"), "FFmpeg 7 legacy CBR option: {}", args);
         assert!(args.contains("-minrate 8000000"), "minrate: {}", args);
         assert!(args.contains("-maxrate 8000000"), "maxrate: {}", args);
         assert!(args.contains("-bufsize 16000000"), "bufsize: {}", args);

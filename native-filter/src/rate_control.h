@@ -24,7 +24,7 @@ inline std::wstring BuildArgs(const std::wstring& codec, long bitrate,
                 L" -maxrate " + std::to_wstring(maxrate) +
                 L" -bufsize " + std::to_wstring(bufferSize);
         if (nvenc) {
-            args += L" -rc cbr -strict_gop 1";
+            args += L" -rc cbr -cbr 1 -strict_gop 1";
             if (nvencCbrPadding) {
                 args += L" -cbr_padding 1";
             }

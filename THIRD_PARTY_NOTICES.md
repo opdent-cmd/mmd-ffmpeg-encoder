@@ -18,7 +18,7 @@
 
 | 组件 | 版本 | 许可证 | 说明 |
 |---|---|---|---|
-| ffmpeg | FFmpeg 9 `2026-10-19-git-2344518cc5` essentials（gyan.dev 构建；`main`）；FFmpeg 7.1 essentials（`ffmpeg-7` 分支） | GPL-3.0（`--enable-gpl`，含 libx264/libx265/libvpx/libaom/libopus 等） | 两者均为静态 64 位构建；各自的配置、SHA-256 和源码信息以对应发行说明为准；构建包附带 GPLv3 许可证 |
+| ffmpeg | FFmpeg 7.1 essentials（gyan.dev 构建；`ffmpeg-7`）；FFmpeg 9 `2026-10-19-git-2344518cc5` essentials（gyan.dev 构建；`main`） | GPL-3.0（`--enable-gpl`，含 libx264/libx265/libvpx/libaom/libopus 等） | 两者均为静态 64 位构建；FFmpeg 7.1 SHA-256：`2CE797A0F88D7F067180338FB227F7B1928EA727BD9A4D7A1D022F7C52AF71A3`；FFmpeg 9 SHA-256：`E81F00DA23DEC8A30E96C79A3718D9106DE7373BBFBF6F390F3BF1FA0D149DB0`；构建包附带 GPLv3 许可证 |
 | NSIS | 3.12 | zlib 许可（LZMA 压缩模块为 CPL-1.0） | 仅用于制作安装程序，不随安装包分发 |
 
 ## 构建/测试时使用的第三方源码
