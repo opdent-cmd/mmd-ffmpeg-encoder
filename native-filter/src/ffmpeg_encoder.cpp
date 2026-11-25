@@ -353,6 +353,14 @@ HRESULT CFFmpegEncoder::SetMediaType(PIN_DIRECTION direction, const CMediaType* 
         } else {
             return VFW_E_INVALIDMEDIATYPE;
         }
+        // FFmpeg's 'bgra' rawvideo reader treats alpha as straight, but MMD
+        // hands us premultiplied frames: the BGRA colors it writes are already
+        // scaled by alpha. ARGB32 means premultiplied (BITMAPINFOHEADER has no
+        // alpha semantics, so the subtype decides); VIDEOINFOHEADER2 with the
+        // Straight Alpha flag means the upstream already converted. RGB32 is
+        // left alone because MMD also uses it for opaque 32-bit renders.
+        m_unpremultiply = IsEqualGUID(m_inSubtype, MEDIASUBTYPE_ARGB32) &&
+                          !IsStraightAlpha(pmt);
     }
     return CTransformFilter::SetMediaType(direction, pmt);
 }

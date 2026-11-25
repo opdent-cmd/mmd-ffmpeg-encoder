@@ -55,7 +55,8 @@ MMD 交给滤镜的 32 位帧是预乘 alpha（颜色已乘过 alpha），而 FF
 | MOV (ProRes 4444 透明) | `prores_ks`、`yuva444p10le`、`-alpha_bits 8` | 8 位源使用 8 位 alpha，避免剪辑软件的舍入差异 |
 | MKV (FFV1 无损透明) | `ffv1`、`yuva444p10le`、`-level 3` | 10 位平面保住 RGB→YUV 的往返精度 |
 
-透明输出固定使用上述参数，界面中的码率模式对 VP9 透明不生效。
+上述参数已同时用 FFmpeg 7.1 与 FFmpeg 9 验证，因此两个发行线共用同一套透明
+路径。透明输出固定使用这些参数，界面中的码率模式对 VP9 透明不生效。
 
 编码输出由读取线程直接投递到 AVI Mux，不再在 MMD 进程内保存编码帧队列。下游
 变慢时会暂停读取 ffmpeg 的标准输出，并通过管道形成背压；内存不会随渲染帧数
@@ -66,7 +67,9 @@ MMD 交给滤镜的 32 位帧是预乘 alpha（颜色已乘过 alpha），而 FF
 仓库按 FFmpeg 大版本维护两个发行分支：`main` 使用 FFmpeg 9，面向当前硬件；
 `ffmpeg-7` 使用 FFmpeg 7.1，供仍依赖旧 NVENC/QSV/AMF 支持的设备使用。两者的
 滤镜、配置工具和 VBR/CBR 修复保持一致，但硬件编码参数按各自 FFmpeg 版本分别维护，
-不要把一个分支的 FFmpeg 参数直接移植到另一个分支。
+不要把一个分支的 FFmpeg 参数直接移植到另一个分支。FFmpeg 7.1 的 NVENC CBR
+需要 `-cbr 1`；FFmpeg 9 已移除此选项，继续传入会导致硬件预检失败并回退到 CPU。
+两个分支分别维护该参数，修复旧版 CBR 的同时避免新版使用不兼容参数。
 
 - 视频编码：H.264、HEVC、AV1；可选 CPU、NVIDIA NVENC、Intel QSV 或 AMD AMF。
 - 输出容器：MP4、MKV，或只保留 MMD AVI。

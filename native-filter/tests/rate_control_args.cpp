@@ -79,7 +79,7 @@ int main()
     const std::wstring nvencCbr =
         rate_control::BuildArgs(L"h264_nvenc", bitrate, true, true);
     if (!Contains(nvencCbr, L"-rc cbr") ||
-        Contains(nvencCbr, L"-cbr 1") ||
+        !Contains(nvencCbr, L"-cbr 1") ||
         !Contains(nvencCbr, L"-cbr_padding 1") ||
         !Contains(nvencCbr, L"-maxrate 8000000")) {
         return Fail(L"NVENC CBR", nvencCbr);

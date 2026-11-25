@@ -64,9 +64,9 @@ VIDEOINFOHEADER2) the conversion is skipped. The decision is logged as an
 | MOV (ProRes 4444 alpha) | `prores_ks`, `yuva444p10le`, `-alpha_bits 8` | matches an 8-bit source and avoids alpha rounding differences in editors |
 | MKV (FFV1 lossless alpha) | `ffv1`, `yuva444p10le`, `-level 3` | 10-bit planes keep the RGB→YUV round trip lossless |
 
-The alpha path uses these fixed arguments; the bitrate mode in the settings UI
-does not apply to VP9 alpha.
-
+These arguments were verified against FFmpeg 7.1 and FFmpeg 9, so the same
+alpha path ships on both release lines. The alpha path uses fixed arguments;
+the bitrate mode in the settings UI does not apply to VP9 alpha.
 Encoded output is delivered directly from the stdout reader to AVI Mux; the
 release filter no longer stores an encoded-frame queue. If downstream delivery
 falls behind, stdout reading pauses and the pipe applies backpressure, so memory
@@ -80,6 +80,10 @@ still require older NVENC/QSV/AMF support. Both lines share the filter, settings
 UI, and VBR/CBR fixes, but keep version-specific hardware encoder arguments in
 their respective branches. Do not move FFmpeg-specific options between the
 branches without checking that build's encoder help.
+FFmpeg 7.1 NVENC CBR requires `-cbr 1`; FFmpeg 9 removed that option, and
+passing it makes hardware preflight fail and fall back to CPU. The branches
+keep this difference isolated, restoring CBR on the legacy line without
+reintroducing an invalid option on the current line.
 
 - Video codecs: H.264, HEVC, and AV1; CPU, NVIDIA NVENC, Intel QSV, or AMD AMF.
 - Containers: MP4, MKV, or MMD AVI only.
