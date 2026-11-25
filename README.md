@@ -47,6 +47,26 @@ Choose VBR to cap peaks. To reduce file size, lower the VBR target rather than
 using CBR as a file-size limit. Alpha output uses a separate CPU encoding path
 and does not use these VBR/CBR settings.
 
+## Alpha Output
+
+MMD hands the filter 32-bit frames with premultiplied alpha (the colors have
+already been scaled by alpha), while FFmpeg's `yuva*`/`gbrap` pixel formats
+expect straight alpha. The filter divides the colors by alpha before writing
+them to `ffmpeg.exe`, so semi-transparent areas export with the same colors MMD
+shows in the viewport; fully opaque pixels are untouched. When the upstream type
+declares straight alpha (the `AMCONTROL_STRAIGHT_ALPHA` flag in
+VIDEOINFOHEADER2) the conversion is skipped. The decision is logged as an
+`Input alpha:` line in `%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder_debug.log`.
+
+| Option | Encoder arguments | Why |
+|---|---|---|
+| WebM (VP9 alpha) | `libvpx-vp9`, `yuva444p`, `-strict experimental`, `-auto-alt-ref 0`, CRF 24 | 4:4:4 avoids the color shift that 4:2:0 chroma upsampling adds on semi-transparent edges |
+| MOV (ProRes 4444 alpha) | `prores_ks`, `yuva444p10le`, `-alpha_bits 8` | matches an 8-bit source and avoids alpha rounding differences in editors |
+| MKV (FFV1 lossless alpha) | `ffv1`, `yuva444p10le`, `-level 3` | 10-bit planes keep the RGB→YUV round trip lossless |
+
+The alpha path uses these fixed arguments; the bitrate mode in the settings UI
+does not apply to VP9 alpha.
+
 Encoded output is delivered directly from the stdout reader to AVI Mux; the
 release filter no longer stores an encoded-frame queue. If downstream delivery
 falls behind, stdout reading pauses and the pipe applies backpressure, so memory
@@ -102,23 +122,29 @@ footage. Restore the settings after testing.
 ## Build from Source
 
 Requirements: Windows 10/11 x64, Rust stable, Visual Studio 2022 C++ Build
-Tools, Windows SDK, NSIS 3.x, and an FFmpeg build at `bin/ffmpeg.exe`.
+Tools, Windows SDK, NSIS 3.x, and an FFmpeg build. Releases ship one installer
+that carries both FFmpeg major lines: the bundled `bin\ffmpeg.exe` is the
+default, and the settings UI can point at a different build.
 
 ```powershell
 native-filter\build.cmd
 native-filter\build\rate_control_args.exe
+native-filter\build\alpha_color.exe
 native-filter\build\abi_smoke.exe native-filter\build\FFmpegVideoEncoder.dll
 cargo test -p ffmpeg_encoder
 cargo build --release -p mmd_encoder_config
 New-Item -ItemType Directory -Force dist | Out-Null
-$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup-FFmpeg9.exe'
-& "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" installer\install.nsi
+$output = Join-Path (Resolve-Path dist).Path 'MMDFfmpegEncoder-Setup.exe'
+$ffmpeg = '<path to the FFmpeg 7.1 or FFmpeg 9 ffmpeg.exe>'
+& "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DOUTPUT_PATH=$output" "/DFFMPEG_PATH=$ffmpeg" installer\install.nsi
 ```
 
-The installer is written to `dist/MMDFfmpegEncoder-Setup.exe`. The filter and
-settings utility can be built independently; distribute an installer only
-after checking its contents. Installation requires administrator privileges
-to register the DirectShow filter.
+`/DFFMPEG_PATH` is optional; without it the installer leaves `bin\ffmpeg.exe`
+out and the filter uses the path stored in `FFmpegEncoder.ini`. The installer is
+written to the `/DOUTPUT_PATH` you pass. The filter and settings utility can be
+built independently; distribute an installer only after checking its contents.
+Installation requires administrator privileges to register the DirectShow
+filter.
 
 ## Repository Layout
 

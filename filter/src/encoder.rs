@@ -217,11 +217,16 @@ pub fn resolve_codec(cfg: &Config) -> String {
 /// These codecs are CPU-only in practice (libvpx/libaom/prores/ffv1), so no
 /// hardware device setup is needed.
 fn alpha_output_args(mode: AlphaMode, cfg: &Config, a: &mut Vec<String>) {
+    // Chroma stays 4:4:4 for VP9 and FFV1: MMD frames are RGBA, and 4:2:0
+    // chroma upsampling shifts colors on semi-transparent edges (GLOW,
+    // particles, anti-aliased silhouettes). FFV1 goes to 10 bit so the
+    // lossless container survives the RGB->YUV round trip without quantizing
+    // the 8-bit source.
     let (codec, pix_fmt) = match mode {
-        AlphaMode::WebmVp9 => ("libvpx-vp9", "yuva420p"),
+        AlphaMode::WebmVp9 => ("libvpx-vp9", "yuva444p"),
         AlphaMode::WebmAv1 => ("libaom-av1", "yuva420p"),
         AlphaMode::MovProres => ("prores_ks", "yuva444p10le"),
-        AlphaMode::MkvFfv1 => ("ffv1", "yuva444p"),
+        AlphaMode::MkvFfv1 => ("ffv1", "yuva444p10le"),
     };
     a.push("-c:v".into());
     a.push(codec.into());
@@ -229,6 +234,11 @@ fn alpha_output_args(mode: AlphaMode, cfg: &Config, a: &mut Vec<String>) {
     a.push(pix_fmt.into());
     match mode {
         AlphaMode::WebmVp9 => {
+            // libvpx needs alternate reference frames disabled for alpha.
+            a.push("-strict".into());
+            a.push("experimental".into());
+            a.push("-auto-alt-ref".into());
+            a.push("0".into());
             if cfg.bitrate > 0 {
                 a.push("-b:v".into());
                 a.push(cfg.bitrate.to_string());
@@ -259,6 +269,8 @@ fn alpha_output_args(mode: AlphaMode, cfg: &Config, a: &mut Vec<String>) {
         AlphaMode::MovProres => {
             a.push("-profile:v".into());
             a.push("4444".into());
+            a.push("-alpha_bits".into());
+            a.push("8".into());
             a.push("-vendor".into());
             a.push("apl0".into());
         }
@@ -1174,11 +1186,16 @@ mod tests {
         let args = build_args(&c, &test_fmt());
         let joined = args.join(" ");
         assert!(joined.contains("-c:v libvpx-vp9"), "args: {}", joined);
+        // 4:4:4 keeps semi-transparent edges from picking up 4:2:0 chroma
+        // upsampling shifts; libvpx needs alternate reference frames off and
+        // the pixel format marked experimental.
         assert!(
-            joined.contains("-pix_fmt yuva420p"),
+            joined.contains("-pix_fmt yuva444p"),
             "alpha pix fmt: {}",
             joined
         );
+        assert!(joined.contains("-auto-alt-ref 0"), "alpha: {}", joined);
+        assert!(joined.contains("-strict experimental"), "alpha: {}", joined);
         assert!(joined.contains("C:/out.webm"), "container path: {}", joined);
         assert!(
             joined.contains("-f h264 pipe:1"),
@@ -1202,10 +1219,11 @@ mod tests {
             joined
         );
         assert!(joined.contains("yuva444p10le"), "alpha: {}", joined);
+        assert!(joined.contains("-alpha_bits 8"), "alpha bits: {}", joined);
     }
 
     #[test]
-    fn alpha_ffv1_uses_yuva444p() {
+    fn alpha_ffv1_keeps_10_bit_alpha() {
         let mut c = test_cfg();
         c.alpha_format = "mkv_ffv1".to_string();
         c.container = "mkv".to_string();
@@ -1213,7 +1231,7 @@ mod tests {
         let args = build_args(&c, &test_fmt());
         let joined = args.join(" ");
         assert!(joined.contains("-c:v ffv1"), "args: {}", joined);
-        assert!(joined.contains("yuva444p"), "alpha: {}", joined);
+        assert!(joined.contains("yuva444p10le"), "alpha: {}", joined);
     }
 
     #[test]

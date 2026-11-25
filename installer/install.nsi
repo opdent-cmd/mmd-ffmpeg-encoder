@@ -27,7 +27,7 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !define APP_NAME "$(PRODUCT_NAME)"
-!define APP_VERSION "1.2.3"
+!define APP_VERSION "1.2.4"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MMDFfmpegEncoder"
 
 !insertmacro MUI_PAGE_WELCOME
@@ -46,8 +46,12 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
 Section "$(INSTALL_SECTION)" SecMain
+  ; FFMPEG_PATH may be left undefined when the release bundles no ffmpeg;
+  ; the filter then uses the path recorded in FFmpegEncoder.ini.
+  !if /FileExists "${FFMPEG_PATH}"
   SetOutPath "$INSTDIR\bin"
   File "${FFMPEG_PATH}"
+  !endif
 
   SetOutPath "$INSTDIR"
   File "..\native-filter\build\FFmpegVideoEncoder.dll"
