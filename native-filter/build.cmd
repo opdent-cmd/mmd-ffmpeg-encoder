@@ -67,8 +67,15 @@ cl /nologo /O2 /MT /W4 /EHsc /std:c++17 /permissive- /utf-8 ^
   "%ROOT%tests\rate_control_args.cpp" /Fe:"%BUILD%\rate_control_args.exe"
 if errorlevel 1 exit /b 1
 
+echo Building alpha color tests...
+cl /nologo /O2 /MT /W4 /EHsc /std:c++17 /permissive- /utf-8 ^
+  /Fo"%BUILD%\obj\alpha_color.obj" ^
+  "%ROOT%tests\alpha_color.cpp" /Fe:"%BUILD%\alpha_color.exe"
+if errorlevel 1 exit /b 1
+
 echo Built %BUILD%\FFmpegVideoEncoder.dll
 echo Built %BUILD%\abi_smoke.exe
 echo Built %BUILD%\test_graph.exe
 echo Built %BUILD%\rate_control_args.exe
+echo Built %BUILD%\alpha_color.exe
 endlocal

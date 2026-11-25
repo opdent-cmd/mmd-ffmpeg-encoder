@@ -40,6 +40,24 @@ VBV；H.264 使用 filler NAL，HEVC 使用 x265 的 HRD/strict-CBR 选项。不
 不要把 CBR 当作文件大小限制。透明输出使用独立的 CPU 编码路径，不应用此处的
 VBR/CBR 设置。
 
+## 透明输出
+
+MMD 交给滤镜的 32 位帧是预乘 alpha（颜色已乘过 alpha），而 FFmpeg 的
+`yuva*`/`gbrap` 像素格式按直通 alpha 解释。滤镜在写入 `ffmpeg.exe` 之前会把
+预乘颜色除以 alpha，所以半透明区域的成片颜色与 MMD 预览一致；完全不透明的
+像素不受影响。若下游连接声明了 Straight Alpha（VIDEOINFOHEADER2 的
+`AMCONTROL_STRAIGHT_ALPHA` 标志），滤镜会跳过该转换。判定结果记录在
+`%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder_debug.log` 的 `Input alpha:` 行。
+
+| 选项 | 编码参数 | 说明 |
+|---|---|---|
+| WebM (VP9 透明) | `libvpx-vp9`、`yuva444p`、`-strict experimental`、`-auto-alt-ref 0`、CRF 24 | 4:4:4 避免 4:2:0 色度上采样在半透明边缘产生色偏 |
+| MOV (ProRes 4444 透明) | `prores_ks`、`yuva444p10le`、`-alpha_bits 8` | 8 位源使用 8 位 alpha，避免剪辑软件的舍入差异 |
+| MKV (FFV1 无损透明) | `ffv1`、`yuva444p10le`、`-level 3` | 10 位平面保住 RGB→YUV 的往返精度 |
+
+上述参数已同时用 FFmpeg 7.1 与 FFmpeg 9 验证，因此两个发行线共用同一套透明
+路径。透明输出固定使用这些参数，界面中的码率模式对 VP9 透明不生效。
+
 编码输出由读取线程直接投递到 AVI Mux，不再在 MMD 进程内保存编码帧队列。下游
 变慢时会暂停读取 ffmpeg 的标准输出，并通过管道形成背压；内存不会随渲染帧数
 持续累积。

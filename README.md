@@ -47,6 +47,27 @@ Choose VBR to cap peaks. To reduce file size, lower the VBR target rather than
 using CBR as a file-size limit. Alpha output uses a separate CPU encoding path
 and does not use these VBR/CBR settings.
 
+## Alpha Output
+
+MMD hands the filter 32-bit frames with premultiplied alpha (the colors have
+already been scaled by alpha), while FFmpeg's `yuva*`/`gbrap` pixel formats
+expect straight alpha. The filter divides the colors by alpha before writing
+them to `ffmpeg.exe`, so semi-transparent areas export with the same colors MMD
+shows in the viewport; fully opaque pixels are untouched. When the upstream type
+declares straight alpha (the `AMCONTROL_STRAIGHT_ALPHA` flag in
+VIDEOINFOHEADER2) the conversion is skipped. The decision is logged as an
+`Input alpha:` line in `%TEMP%\MMDFfmpegEncoder\ffmpeg_encoder_debug.log`.
+
+| Option | Encoder arguments | Why |
+|---|---|---|
+| WebM (VP9 alpha) | `libvpx-vp9`, `yuva444p`, `-strict experimental`, `-auto-alt-ref 0`, CRF 24 | 4:4:4 avoids the color shift that 4:2:0 chroma upsampling adds on semi-transparent edges |
+| MOV (ProRes 4444 alpha) | `prores_ks`, `yuva444p10le`, `-alpha_bits 8` | matches an 8-bit source and avoids alpha rounding differences in editors |
+| MKV (FFV1 lossless alpha) | `ffv1`, `yuva444p10le`, `-level 3` | 10-bit planes keep the RGB→YUV round trip lossless |
+
+These arguments were verified against FFmpeg 7.1 and FFmpeg 9, so the same
+alpha path ships on both release lines. The alpha path uses fixed arguments;
+the bitrate mode in the settings UI does not apply to VP9 alpha.
+
 Encoded output is delivered directly from the stdout reader to AVI Mux; the
 release filter no longer stores an encoded-frame queue. If downstream delivery
 falls behind, stdout reading pauses and the pipe applies backpressure, so memory

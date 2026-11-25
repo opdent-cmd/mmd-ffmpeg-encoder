@@ -79,6 +79,24 @@ namespace {
         return true;
     }
 
+    // VIDEOINFOHEADER2 carries the AMCONTROL_* flags (the field was renamed
+    // dwReserved1 in newer SDKs). AMCONTROL_STRAIGHT_ALPHA says the colors are
+    // not premultiplied; older SDK headers do not define it.
+    const DWORD kStraightAlphaFlag = 0x00000008;
+
+    bool IsStraightAlpha(const CMediaType* pmt)
+    {
+        if (!pmt || !pmt->Format()) {
+            return false;
+        }
+        if (*pmt->FormatType() == FORMAT_VideoInfo2 &&
+            pmt->FormatLength() >= sizeof(VIDEOINFOHEADER2)) {
+            const VIDEOINFOHEADER2* vih2 = (const VIDEOINFOHEADER2*)pmt->Format();
+            return (vih2->dwReserved1 & kStraightAlphaFlag) != 0;
+        }
+        return false;
+    }
+
     bool SamePath(const std::wstring& left, const std::wstring& right)
     {
         if (left.empty() || right.empty()) {
@@ -309,6 +327,14 @@ HRESULT CFFmpegEncoder::SetMediaType(PIN_DIRECTION direction, const CMediaType* 
         } else {
             return VFW_E_INVALIDMEDIATYPE;
         }
+        // FFmpeg's 'bgra' rawvideo reader treats alpha as straight, but MMD
+        // hands us premultiplied frames: the BGRA colors it writes are already
+        // scaled by alpha. ARGB32 means premultiplied (BITMAPINFOHEADER has no
+        // alpha semantics, so the subtype decides); VIDEOINFOHEADER2 with the
+        // Straight Alpha flag means the upstream already converted. RGB32 is
+        // left alone because MMD also uses it for opaque 32-bit renders.
+        m_unpremultiply = IsEqualGUID(m_inSubtype, MEDIASUBTYPE_ARGB32) &&
+                          !IsStraightAlpha(pmt);
     }
     return CTransformFilter::SetMediaType(direction, pmt);
 }
@@ -775,21 +801,28 @@ void CFFmpegEncoder::BuildCmdLine(std::wstring& cmd)
     cmd += L" -i pipe:0";
 
     if (!m_alphaFormat.empty() && !m_extraPath.empty()) {
+        const bool vp9 = m_alphaFormat == L"webm_vp9" || m_alphaFormat == L"vp9";
         cmd += L" -map 0:v";
         if (m_bottomUp) {
             cmd += L" -vf vflip";
         }
-        if (m_alphaFormat == L"webm_vp9" || m_alphaFormat == L"vp9") {
-            cmd += L" -c:v libvpx-vp9 -pix_fmt yuva420p -deadline good -cpu-used 2 -row-mt 1";
+        cmd += L" -c:v ";
+        if (vp9) {
+            // 'auto-alt-ref 0' is what libvpx expects for an alpha plane; keep
+            // chroma 4:4:4 so semi-transparent edges do not pick up 4:2:0
+            // upsampling color shifts. The output is WebM either way.
+            cmd += L"libvpx-vp9 -pix_fmt yuva444p -strict experimental"
+                   L" -auto-alt-ref 0 -deadline good -cpu-used 2 -row-mt 1";
         } else if (m_alphaFormat == L"mov_prores" || m_alphaFormat == L"prores") {
-            cmd += L" -c:v prores_ks -pix_fmt yuva444p10le -profile:v 4444 -vendor apl0";
+            cmd += L"prores_ks -pix_fmt yuva444p10le -profile:v 4444"
+                   L" -alpha_bits 8 -vendor apl0";
         } else {
-            cmd += L" -c:v ffv1 -pix_fmt yuva444p -level 3";
+            cmd += L"ffv1 -pix_fmt yuva444p10le -level 3";
         }
-        if (m_bitrate > 0) {
-            cmd += L" -b:v " + std::to_wstring(m_bitrate);
-        } else if (m_crf > 0 && m_alphaFormat.find(L"vp9") != std::wstring::npos) {
-            cmd += L" -crf " + std::to_wstring(m_crf);
+        if (vp9) {
+            // The alpha path is documented to ignore the bitrate modes; a
+            // fixed high-quality CRF keeps previews and exports comparable.
+            cmd += L" -crf 24";
         }
         if (!m_extra.empty()) {
             cmd += L" " + m_extra;
@@ -1127,22 +1160,30 @@ HRESULT CFFmpegEncoder::WriteFrame(const BYTE* data, long cb)
 
     const BYTE* src = data;
     long len = cb;
-    std::vector<BYTE> depad;
+    std::vector<BYTE> staged;
 
     if (cb < tight) {
         return VFW_E_BUFFER_UNDERFLOW;
     }
     if (stride != row && cb >= padded) {
         // DIB rows are DWORD aligned; strip padding for ffmpeg rawvideo.
-        depad.resize(tight);
+        staged.resize(tight);
         const BYTE* p = data;
         for (int y = 0; y < m_height; y++) {
-            memcpy(&depad[static_cast<size_t>(y) * row], p, row);
+            memcpy(&staged[static_cast<size_t>(y) * row], p, row);
             p += stride;
         }
-        src = depad.data();
+    } else {
+        staged.assign(data, data + tight);
     }
     len = tight;
+
+    // One staging copy per frame is needed anyway: the caller's sample buffer
+    // must not be modified, and premultiplied input has to be converted.
+    if (m_unpremultiply && m_bpp == 32) {
+        Unpremultiply(staged.data(), static_cast<size_t>(m_width) * m_height);
+    }
+    src = staged.data();
 
     DWORD written = 0;
     const BYTE* p = src;
@@ -1158,6 +1199,27 @@ HRESULT CFFmpegEncoder::WriteFrame(const BYTE* data, long cb)
         remaining -= (long)written;
     }
     return S_OK;
+}
+
+void CFFmpegEncoder::Unpremultiply(BYTE* pixels, size_t count) const
+{
+    // MMD stores premultiplied BGRA. FFmpeg's yuva*/gbrap formats carry
+    // straight alpha, so colors must be divided by alpha first; without this
+    // semi-transparent pixels come out dark (GLOW/particles/edges).
+    for (size_t i = 0; i < count; ++i, pixels += 4) {
+        const unsigned a = pixels[3];
+        if (a == 255) {
+            continue;
+        }
+        if (a == 0) {
+            pixels[0] = pixels[1] = pixels[2] = 0;
+            continue;
+        }
+        for (int c = 0; c < 3; ++c) {
+            const unsigned v = (pixels[c] * 255u + a / 2u) / a;
+            pixels[c] = static_cast<BYTE>(v > 255u ? 255u : v);
+        }
+    }
 }
 
 HRESULT CFFmpegEncoder::ReaderError() const

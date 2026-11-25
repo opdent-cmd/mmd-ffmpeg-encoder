@@ -53,6 +53,7 @@ private:
     bool    MergeAudio();
     bool    RunCommand(const std::wstring& cmd, DWORD timeoutMs);
     HRESULT WriteFrame(const BYTE* data, long cb);
+    void    Unpremultiply(BYTE* pixels, size_t count) const;
     HRESULT DeliverPacket(Packet& pkt);
     HRESULT DeliverPackets(std::vector<Packet>& packets);
     HRESULT ReaderError() const;
@@ -71,6 +72,7 @@ private:
     int     m_height = 0;
     int     m_bpp = 0;             // bits per pixel of the input
     bool    m_bottomUp = false;    // DIB rows are stored bottom-up
+    bool    m_unpremultiply = false; // input BGRA colors carry premultiplied alpha
     REFERENCE_TIME m_frameDur = 1; // AvgTimePerFrame, 100ns units
     GUID    m_inSubtype = GUID_NULL;
     std::wstring m_pixfmt;         // ffmpeg rawvideo pixel format
